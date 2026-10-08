@@ -7,7 +7,7 @@ import pytest
 from memory.graph import Graph, GraphConfig, fuse, keyword_query
 
 
-def bag_of_words(self, text, usage):
+def bag_of_words(self, text, usage, query=False):
     vector = np.zeros(self.config.dimension, dtype=np.float32)
     for word in text.split():
         vector[int(hashlib.md5(word.encode()).hexdigest(), 16) % self.config.dimension] += 1
@@ -138,3 +138,15 @@ def test_anchored_facts_need_no_similarity_floor(graph):
     graph.ingest(group, [memory(1, '위유준은 농구를 한다.', '위유준', 'PLAYS', '농구', kind='Thing'),
                          memory(2, '민수는 서울에 산다.', '민수', 'LIVES_IN', '서울')], create=True)
     assert [e['fact'] for e in graph.search(group, '위유준의 취미는?')] == ['위유준은 농구를 한다.']
+
+
+def test_memories_without_edges_are_found_by_their_statement(graph):
+    group = graph.new_group()
+    tired = {'id': 1, 'statement': '사용자는 요즘 야근이 많아 지쳐 있다.', 'valid_from': '2026-01-01', 'relations': []}
+    mapping = graph.ingest(group, [tired, memory(2, '민수는 서울에 산다.', '민수', 'LIVES_IN', '서울')], create=True)
+    episode = next(ep for ep, ids in mapping.items() if ids == [1])
+    [hit] = [e for e in graph.search(group, '요즘 야근이 많아') if e['episodes'] == [episode]]
+    assert hit['uuid'] == 'episode:' + episode and hit['fact'] == tired['statement']
+    assert any(e['uuid'] == 'episode:' + episode for e in graph.search(group, '무관한 질문', pinned_episodes=[episode]))
+    graph.remove(group, [episode], {})
+    assert not any(e['uuid'].startswith('episode:') for e in graph.search(group, '요즘 야근이 많아'))

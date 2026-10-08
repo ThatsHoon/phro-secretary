@@ -273,6 +273,12 @@ class Store:
             row['relations'] = None if row['relations'] is None else json.loads(row['relations'])
         return rows
 
+    def recent_user_messages(self, limit=2):
+        """The latest visible user messages, most recent first: what a follow-up question may refer back to."""
+        with self.connect() as conn:
+            return [r[0] for r in conn.execute("SELECT text FROM messages WHERE role='user' AND hidden_batch IS NULL"
+                                               " AND text<>'' ORDER BY id DESC LIMIT ?",(limit,))]
+
     def context(self, limit=10):
         return self.context_snapshot(limit=limit)[0]
 

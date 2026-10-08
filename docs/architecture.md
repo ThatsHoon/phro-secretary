@@ -36,13 +36,18 @@ desktop/main.cjs (Electron)
 1. 클라이언트가 `turn_id`를 만들고 `/retrieve`로 표시용 기억과 `memory_epoch`를 받는다.
 2. `/respond`는 서버에서 **다시 인출**한다. 답변 근거와 출처는 서버 인출에서만 나온다(클라이언트 블록은 표시용).
    프롬프트 = `[기억]` + `[대화]`(요약 + 최근 10개 메시지) + `[사용자]`. 답변의 `[m:ID]`는 인용, `[e:감정]`은 동작으로 뗀다.
+   지침은 `server.RESPOND`: 오늘 날짜·시각, 블록의 의미, 기억 사용 원칙(관련된 것만, 없는 사실은 모른다, 늦은 시점과 지금
+   대화가 우선, 날짜는 오늘 기준, 남의 사실은 그 사람에게, 민감한 기억은 관련 있을 때만, 쓴 기억만 인용).
+   기억 줄은 `[m:ID] (YYYY-MM-DD부터[, ~끝]) 문장`, 끝난 일정·상태는 `(지난 일, ~YYYY-MM-DD)`.
 3. 서버가 응답 해시·epoch·출처를 `response_drafts`에 둔다(10분, 최대 256개).
 4. `/commit`이 초안과 대조해 대화·작업·`turn_dependencies`를 한 트랜잭션으로 기록한다. 취소됐거나 epoch가 바뀐 응답은 거부.
 5. 워커가 **사용자 메시지에서만** 기억을 추출(Claude)하고, 별도 검증 호출(Claude)이 accept한 주장만 확정한다.
-   추출은 주장마다 `(주체, 관계, 대상)` 트리플을 함께 내고 `memories.relations`에 저장한다.
+   추출은 주장마다 `(주체, 관계, 대상)` 트리플을 함께 내고 `memories.relations`에 저장한다. 오늘 날짜(TODAY)를 받아
+   `valid_from`(사실이 성립한 날, 말한 경우만)과 `expires_at`(일정·마감·한시적 상태가 끝난 다음 날)을 날짜로 내고,
+   문장 속 상대 날짜는 절대 날짜로 바꾼다(`service.DATE_RULES`). 형식이 틀린 날짜는 그 날짜만 버린다.
    질문만 있는 턴(회상·가정·양자택일)은 추출을 부르지 않는다(`service.question_only`, 기록은 `memory_extract_skipped`).
-6. 확정 기억의 트리플을 그래프에 넣는다(`Graph.ingest`). 관계가 NULL인 기억(형식 오류 등)은 엣지 없이 `missing`으로 남고,
-   기억 관리 화면의 "관계 분석"(`/relations_backfill`, 추출과 같은 2단계 검증)으로 채운다.
+6. 확정 기억의 트리플을 그래프에 넣는다(`Graph.ingest`). 엣지가 없는 기억(관계 `[]`, 또는 형식 오류로 NULL)은 문장 자체를
+   임베딩·FTS로 색인해 문장으로 검색된다. NULL은 기억 관리 화면의 "관계 분석"(`/relations_backfill`)으로 트리플을 채운다.
 7. 오래된 메시지가 쌓이면 haiku가 대화 언어로 롤링 요약한다. 보관·삭제가 일어나면 요약은 통째로 다시 만든다.
 
 ## 그래프 반영 규칙
@@ -60,9 +65,14 @@ desktop/main.cjs (Electron)
   전체 재구축은 그래프 설정(`GraphConfig.ingestion`, 임베딩 모델) 변경, 쓰기 중 장애(pending 세대), `/reset`, 반영 실패 재시도에서만.
 - 빼기(`Graph.remove`)는 출처가 모두 빠진 엣지만 지우고, 공유 엣지는 남은 첫 기억의 문장으로 fact를 다시 쓴다.
   무효화는 엣지 속성 `invalidated_by`로 기록해 원인이 빠지면 되살리거나 대체한 기억에 넘긴다.
-- 인출은 질문에 나온 엔티티 이름(나/내/저는 → "사용자")의 엣지 안에서 먼저 찾는다(`Graph._anchors`), 그다음 하이브리드 검색:
-  FTS5 bm25(엣지 관계 이름·fact, 단어 OR)와 cosine 유사도(0.6 초과)를 각각 2×limit개 뽑아 RRF(상수 1)로 합친다.
-  보관된 기억이 출처인 엣지는 워커가 그래프를 고치기 전에도 버린다. 고정 기억은 항상 포함, 예산 1200은 **UTF-8 바이트**.
+- 인출 순서(`Graph.search`): ① 앵커 엔티티의 엣지 ② 앵커와 유효한 엣지로 이어진 사람 엔티티의 엣지 ③ 전체 하이브리드
+  (엣지 + 엣지 없는 기억의 문장). 각 목록은 FTS5 bm25(단어 OR)와 cosine 유사도를 2×limit개씩 뽑아 RRF(상수 1)로 합친다.
+  유사도 하한 0.6은 ③에만 쓴다(앵커 후보는 이미 질문 대상이라 하한 없이 순위만 매김).
+- 앵커(`Graph._anchors`): 질문에 나온 이름(가장 긴 일치), 나/내/저/우리 → "사용자". 이름이 없으면 직전 사용자 메시지
+  2개의 이름(후속 질문 "그분 무슨 일 하셨지?"), 그것도 없으면 "사용자"(개인 비서의 질문 기본 주어).
+- 임베딩은 nomic 작업 접두어를 붙인다(질문 `search_query:`, 저장 문장 `search_document:`).
+- 끝난 일정·상태(`expires_at` 경과)는 버리지 않고 "지난 일"로 표시하며 점수를 0.3 낮춘다. 무효화된 사실(`invalid_at`)은 뺀다.
+  보관된 기억이 출처인 엣지는 워커가 그래프를 고치기 전에도 버린다. 고정 기억은 항상 포함, 예산 1600은 **UTF-8 바이트**.
 
 ## 불변 조건
 
@@ -104,7 +114,7 @@ py -3.12 -m venv .venv
 |---|---|
 | 원본 DB | `%LOCALAPPDATA%/phro-demo/memory.db`, `PHRO_MEMORY_DB` |
 | API / 데스크톱 포트 | 8770 / 8771(`PHRO_DESKTOP_PORT`) |
-| Claude 모델 | 응답·추출·검증·관계 소급 sonnet, 요약·관계 판정 haiku (코드 고정) |
+| Claude 모델 | 응답·추출·검증·관계 소급 `claude-sonnet-5-5`, 요약·관계 판정 `claude-haiku-5-5` (`server.MODELS`), `--effort medium` |
 | 임베딩 모델 폴더 | `PHRO_MODEL_DIR`, 기본 `models/nomic-embed-text-v1.5` |
 | Python(데스크톱) | `PHRO_PYTHON`, 기본 루트 `.venv` |
 
@@ -143,13 +153,14 @@ py -3.12 -m venv .venv
 $env:PHRO_LIVE_TEST='1'; .venv/Scripts/python.exe -m pytest -q tests/test_graph_live.py              # 실제 임베딩 모델
 $env:PHRO_CLAUDE_TEST='1'                                                                             # + 실제 Claude 판정(유료)
 .venv/Scripts/python.exe tests/scenario_full.py   # 실제 Claude 전체 시나리오(유료, 약 $0.26)
+.venv/Scripts/python.exe tests/eval_memory.py    # 대화형 인출 평가 18문항(후속 질문·관계 없는 기억·별칭·시간·정정), Claude 없음
 ```
 
 live 테스트는 `models/`에 모델이 있어야 한다. 테스트는 임시 DB와 그 옆 그래프 파일만 건드린다. 사용자 DB(`%LOCALAPPDATA%\phro-demo\memory.db`)로 테스트하지 않는다.
 
-측정 기준치(합성 DB, `tests/scale_bench.py`, SQLite 그래프 + 프로세스 내 임베딩): 1만 개 기억에서 보관·복구·추가 0.5초 미만,
-반영 기억당 0.028s, 인출 p50 0.26s / p95 0.29s, 근거 포함률 100%(질의 200개), 그래프 파일 45MB.
-(이전 FalkorDB+Ollama: 반영 0.11s, 인출 p50 0.4s, 포함률 100%.)
+측정 기준치(합성 DB, `tests/scale_bench.py`, SQLite 그래프 + 프로세스 내 임베딩): 1만 개 기억에서 보관·복구·추가 1초 미만,
+반영 기억당 0.035s, 인출 p50 0.39s / p95 0.44s(앵커·사람 확장·문장 검색 포함), 근거 포함률 100%(질의 200개).
+대화형 인출 평가(`tests/eval_memory.py`) 18/18. (이전 FalkorDB+Ollama: 반영 0.11s, 인출 p50 0.4s, 대화형 평가 7/18.)
 실제 Claude 시나리오 21개 검사 통과, 한 번에 약 $0.26.
 
 ## 남은 작업

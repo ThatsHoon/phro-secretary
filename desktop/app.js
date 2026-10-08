@@ -36,7 +36,7 @@ function describe(m) {
   if(m.error)return 'KG 오류 · '+m.error;
   if(busy)return `기억 정리 중 ${busy}건`;
   if(!m.ready)return 'KG 반영 대기 중';
-  if(m.coverage?.missing)return `KG 반영 완료 · 관계 누락 ${m.coverage.missing}건(검색 안 될 수 있음)`;
+  if(m.coverage?.missing)return `KG 반영 완료 · 관계 누락 ${m.coverage.missing}건(문장으로만 검색)`;
   return '기억 · KG 반영 완료';
 }
 async function refresh() {

@@ -247,7 +247,7 @@ async function health() {
       if (m.jobs.dead) [state, text] = ['warn', `기억 처리 실패 ${m.jobs.dead}건`];
       else if (m.error) [state, text] = ['warn', `KG 오류: ${m.error}`];
       else if (!m.ready) [state, text] = ['warn', 'KG 반영 대기 중'];
-      else if (m.coverage?.missing) [state, text] = ['warn', `KG 관계 누락 ${m.coverage.missing}건 (검색 안 될 수 있음)`];
+      else if (m.coverage?.missing) [state, text] = ['warn', `KG 관계 누락 ${m.coverage.missing}건 (문장으로만 검색)`];
       else [state, text] = ['ok', '연결됨 · KG 반영 완료'];
     }
   } catch {}

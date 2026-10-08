@@ -47,11 +47,13 @@ class Embedder:
                                                             providers=['CPUExecutionProvider'])
                 self.tokenizer = tokenizer
 
-    def embed(self, text):
-        """(unit vector, token count) for one text: mean pooling over tokens, as the model was trained."""
+    def embed(self, text, query=False):
+        """(unit vector, token count) for one text: mean pooling over tokens, as the model was trained.
+
+        The model was trained with task prefixes: questions and the stored texts they search take different ones."""
         if self.session is None:
             self._load()
-        encoding = self.tokenizer.encode(text)
+        encoding = self.tokenizer.encode(('search_query: ' if query else 'search_document: ') + text)
         ids = np.array([encoding.ids], dtype=np.int64)
         mask = np.array([encoding.attention_mask], dtype=np.int64)
         hidden = self.session.run(None, {'input_ids': ids, 'attention_mask': mask,

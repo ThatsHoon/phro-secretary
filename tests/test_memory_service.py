@@ -25,7 +25,7 @@ class FakeGraph:
         if self.hook: self.hook()
         if self.fail: raise RuntimeError('lost acknowledgement')
         return mapping
-    def search(self,group,text,limit=12,pinned_episodes=(),turn_id=None):
+    def search(self,group,text,limit=12,pinned_episodes=(),turn_id=None,context=()):
         return [dict(uuid=ep,fact=fact,episodes=[ep],invalid_at=None) for ep,fact in self.groups[group].items()]
     def edge_counts(self,group,episodes): return {ep:1 for ep in episodes if ep in self.groups.get(group,{})}
     def owns(self,group): return group.startswith('group-')

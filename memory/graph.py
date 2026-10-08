@@ -23,7 +23,7 @@ from .embedder import DIMENSION, MODEL, shared
 
 
 # Words by which the user refers to themself; they anchor retrieval on the "사용자" entity.
-SELF = {'나', '내', '난', '날', '나는', '내가', '나의', '내게', '나도', '저', '제', '저는', '제가', '저의', '저도'}
+SELF = {'나', '내', '난', '날', '나는', '내가', '나의', '내게', '나도', '저', '제', '저는', '제가', '저의', '저도', '우리'}
 
 # The relation vocabulary (memory/service.py RELATION_RULES) decides conflicts without a model call.
 # SINGLE: one current value per subject; a new object replaces the old one (moving, a new job, a new name).
@@ -50,7 +50,10 @@ CREATE TABLE IF NOT EXISTS edges(id INTEGER PRIMARY KEY, uuid TEXT NOT NULL UNIQ
     invalidated_by TEXT);
 CREATE INDEX IF NOT EXISTS edge_source ON edges(graph, source);
 CREATE INDEX IF NOT EXISTS edge_target ON edges(graph, target);
-CREATE TABLE IF NOT EXISTS episodes(uuid TEXT PRIMARY KEY, graph TEXT NOT NULL, edges TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS episodes(uuid TEXT PRIMARY KEY, graph TEXT NOT NULL, edges TEXT NOT NULL,
+    statement TEXT, embedding BLOB);
+CREATE VIRTUAL TABLE IF NOT EXISTS episode_text USING fts5(uuid UNINDEXED, graph UNINDEXED, statement,
+    tokenize='porter unicode61');
 CREATE VIRTUAL TABLE IF NOT EXISTS edge_text USING fts5(name, fact, content='edges', content_rowid='id',
     tokenize='porter unicode61');
 CREATE TRIGGER IF NOT EXISTS edge_text_insert AFTER INSERT ON edges BEGIN
@@ -61,7 +64,9 @@ CREATE TRIGGER IF NOT EXISTS edge_text_update AFTER UPDATE OF name, fact ON edge
     INSERT INTO edge_text(edge_text, rowid, name, fact) VALUES ('delete', old.id, old.name, old.fact);
     INSERT INTO edge_text(rowid, name, fact) VALUES (new.id, new.name, new.fact); END;
 '''
-
+# The file is derived data: a file from another schema version is emptied and rebuilt (GraphConfig.ingestion
+# changes with it, so every projection is re-ingested from the memory DB).
+SCHEMA_VERSION = 2
 JUDGE = '''You compare a NEW FACT with facts already stored about the same people, places and things.
 Indices run continuously: EXISTING FACTS (same two entities) first, then OTHER VALUES (same relation, another object).
 - duplicate_facts: indices from EXISTING FACTS only, whose information is identical to the NEW FACT. Facts that differ
@@ -129,7 +134,7 @@ class GraphConfig:
     embedding: str = MODEL
     dimension: int = DIMENSION
     # Bumping this changes digest(), which rebuilds existing projections with the new ingestion path.
-    ingestion: str = 'sqlite-v1'
+    ingestion: str = 'sqlite-v2'
 
     def digest(self):
         return hashlib.sha256(json.dumps(self.__dict__,sort_keys=True).encode()).hexdigest()
@@ -162,7 +167,11 @@ class Graph:
         os.makedirs(os.path.dirname(os.path.abspath(self.path)),exist_ok=True)
         conn = sqlite3.connect(self.path,timeout=30)
         try:
+            if conn.execute('PRAGMA user_version').fetchone()[0] != SCHEMA_VERSION:
+                for table in ('edge_text','episode_text','edges','entities','episodes','graphs'):
+                    conn.execute(f'DROP TABLE IF EXISTS {table}')
             conn.executescript(SCHEMA)
+            conn.execute(f'PRAGMA user_version={SCHEMA_VERSION}')
         finally:
             conn.close()
 
@@ -210,8 +219,8 @@ class Graph:
                 self.audit(purpose,self.config.embedding,round((time.monotonic()-started)*1000),
                            usage=usage,error=error,turn_id=turn_id)
 
-    def _embed(self, text, usage):
-        vector, tokens = self.embedder.embed(text.replace('\n',' '))
+    def _embed(self, text, usage, query=False):
+        vector, tokens = self.embedder.embed(text.replace('\n',' '),query)
         usage['requests'] += 1
         usage['embed_tokens'] += tokens
         if vector.shape != (self.config.dimension,):
@@ -275,7 +284,14 @@ class Graph:
                 episode = str(uuid.uuid4())
                 stamp = when(memory['valid_from'])
                 edges = [self._resolve(conn,usage,group,r,memory,episode,stamp) for r in memory.get('relations') or []]
-                conn.execute('INSERT INTO episodes(uuid,graph,edges) VALUES (?,?,?)',(episode,group,json.dumps(edges)))
+                # A memory without edges is searchable by its statement (_rank); with edges, retrieval goes through
+                # them, because only edges carry validity (a superseded statement must not come back as current).
+                statement = None if edges else memory['statement']
+                embedding = self._embed(statement,usage).tobytes() if statement else None
+                conn.execute('INSERT INTO episodes(uuid,graph,edges,statement,embedding) VALUES (?,?,?,?,?)',
+                             (episode,group,json.dumps(edges),statement,embedding))
+                if statement:
+                    conn.execute('INSERT INTO episode_text(uuid,graph,statement) VALUES (?,?,?)',(episode,group,statement))
                 mapping[episode] = [memory['id']]
 
     def _entity(self, conn, group, name, kind):
@@ -390,7 +406,33 @@ class Graph:
                     'next':'merge into existing edge' if duplicate else 'invalidate older edge' if contradicted else 'add edge'})
         return duplicate, contradicted
 
-    def _anchors(self, conn, group, text):
+    def _anchors(self, conn, group, text, context=()):
+        """Entities a question is about, as (direct, related) entity uuid lists.
+
+        direct: names in the text (longest match wins) and "사용자" for self-reference. A follow-up that names no one
+        ("그분 무슨 일 하셨지?") takes the names of the most recent earlier user message that has any; with none at
+        all the subject is the user ("다가오는 여행 일정 있어?"): a personal assistant is asked about its user.
+        related: people linked to a direct anchor by a valid edge, whose own facts answer questions about them
+        ("어머니는 무슨 일 하셔?": 사용자 -FAMILY_OF-> 김영희 -HAS_JOB-> 초등학교 교사).
+        """
+        direct = self._named(conn,group,text)
+        for previous in context:
+            if direct:
+                break
+            direct = self._named(conn,group,previous)
+        if not direct:
+            direct = [r['uuid'] for r in conn.execute("SELECT uuid FROM entities WHERE graph=? AND name='사용자'",(group,))]
+        if not direct:
+            return [], []
+        marks = ','.join('?'*len(direct))
+        related = [r[0] for r in conn.execute(
+            f"""SELECT DISTINCT n.uuid FROM edges e JOIN entities n
+                ON n.uuid = CASE WHEN e.source IN ({marks}) THEN e.target ELSE e.source END
+                WHERE e.graph=? AND e.invalid_at IS NULL AND (e.source IN ({marks}) OR e.target IN ({marks}))
+                AND n.labels LIKE '%"Person"%' AND n.uuid NOT IN ({marks})""",(*direct,group,*direct,*direct,*direct))]
+        return direct, related
+
+    def _named(self, conn, group, text):
         """Entity nodes named in the text: exact names (longest match wins), and the user for self-reference."""
         rows = conn.execute('SELECT uuid,name FROM entities WHERE graph=? AND length(name)>=2 AND instr(?,name)>0',
                             (group,text)).fetchall()
@@ -458,6 +500,7 @@ class Graph:
                 self._save_edge(conn,edge)
             conn.executemany('DELETE FROM edges WHERE uuid=?',[(u,) for u in dead])
             conn.executemany('DELETE FROM episodes WHERE uuid=?',[(r['uuid'],) for r in found])
+            conn.executemany('DELETE FROM episode_text WHERE uuid=?',[(r['uuid'],) for r in found])
             conn.executemany('DELETE FROM entities WHERE uuid=? AND NOT EXISTS (SELECT 1 FROM edges'
                              ' WHERE edges.source=entities.uuid OR edges.target=entities.uuid)',[(u,) for u in touched])
             return {'episodes':len(found),'edges_deleted':len(dead),'edges_kept':len(alive)}
@@ -473,35 +516,48 @@ class Graph:
                                 f' ({",".join("?"*len(episodes))})',(group,*episodes)).fetchall()
         return {r[0]:r[1] for r in rows}
 
-    def search(self, group, text, limit=12, pinned_episodes=(), turn_id=None):
+    def search(self, group, text, limit=12, pinned_episodes=(), turn_id=None, context=()):
+        """Edges (and statements of edgeless memories) for a question, best first, as
+        {uuid, fact, episodes, valid_at, invalid_at}; a statement hit has uuid 'episode:<uuid>' and no validity.
+        context: earlier user messages, most recent first, for questions that refer back to them."""
         self._check_group(group)
         with self._audited('graph_search',turn_id) as usage, self._db() as conn:
             if not self._exists(conn,group):
                 raise ValueError('active projection missing')
-            vector = self._embed(text,usage)
+            vector = self._embed(text,usage,query=True)
             # Entity anchoring: hybrid search alone ranks "김민준이 좋아하는 음료는?" against every LIKES fact
             # (Korean particles defeat the keyword index, and the embedding barely separates names), so the
-            # asked-about memory fell out of the top results as memories grew. Entities named in the question
-            # (and "사용자" for 나/내/저) narrow the candidates to their own edges first.
-            anchors = self._anchors(conn,group,text)
-            ranked = self._hybrid(conn,group,text,vector,limit,anchors) if anchors else []
-            ranked += self._hybrid(conn,group,text,vector,limit)
+            # asked-about memory fell out of the top results as memories grew. The entities the question is about
+            # (_anchors) narrow the candidates to their own edges first, then to their people's edges.
+            direct, related = self._anchors(conn,group,text,context)
+            ranked = []
+            for anchors in (direct, related):
+                if anchors:
+                    ranked += fuse(*self._rank_edges(conn,group,text,vector,limit,anchors))[:limit]
+            ranked += fuse(*self._rank_edges(conn,group,text,vector,limit),
+                           *self._rank_statements(conn,group,text,vector,limit))[:limit]
             ids = list(dict.fromkeys(ranked))
-            edges = {e['uuid']:e for e in self._edges(conn,f'uuid IN ({",".join("?"*len(ids))})',ids)} if ids else {}
-            out = [edges[u] for u in ids if u in edges]
             if pinned_episodes:
                 pinned = list(pinned_episodes)
-                rows = conn.execute(f'SELECT edges FROM episodes WHERE graph=? AND uuid IN ({",".join("?"*len(pinned))})',
-                                    (group,*pinned)).fetchall()
-                extra = list({eid for r in rows for eid in json.loads(r['edges'])} - set(ids))
-                if extra:
-                    out += self._edges(conn,f'uuid IN ({",".join("?"*len(extra))})',extra)
-        return [{'uuid':e['uuid'],'fact':e['fact'],'episodes':e['episodes'],
-                 'valid_at':e['valid_at'],'invalid_at':e['invalid_at']} for e in out]
+                for r in conn.execute(f'SELECT uuid,edges FROM episodes WHERE graph=? AND uuid IN ({",".join("?"*len(pinned))})',
+                                      (group,*pinned)):
+                    ids += json.loads(r['edges']) or ['episode:'+r['uuid']]
+                ids = list(dict.fromkeys(ids))
+            edge_ids = [u for u in ids if not u.startswith('episode:')]
+            episode_ids = [u[8:] for u in ids if u.startswith('episode:')]
+            found = {e['uuid']:{'uuid':e['uuid'],'fact':e['fact'],'episodes':e['episodes'],'valid_at':e['valid_at'],
+                                'invalid_at':e['invalid_at']}
+                     for e in (self._edges(conn,f'uuid IN ({",".join("?"*len(edge_ids))})',edge_ids) if edge_ids else [])}
+            if episode_ids:
+                for r in conn.execute(f'SELECT uuid,statement FROM episodes WHERE uuid IN ({",".join("?"*len(episode_ids))})'
+                                      ' AND statement IS NOT NULL',episode_ids):
+                    found['episode:'+r['uuid']] = {'uuid':'episode:'+r['uuid'],'fact':r['statement'],'episodes':[r['uuid']],
+                                                   'valid_at':None,'invalid_at':None}
+        return [found[u] for u in ids if u in found]
 
-    def _hybrid(self, conn, group, text, vector, limit, anchors=None):
-        """Edge uuids ranked by keyword (FTS5 bm25) and cosine similarity, 2*limit candidates each, fused by
-        reciprocal rank. anchors limits candidates to edges touching those entities.
+    def _rank_edges(self, conn, group, text, vector, limit, anchors=None):
+        """Edge uuids by keyword (FTS5 bm25) and by cosine similarity, 2*limit candidates each, to be fused.
+        anchors limits candidates to edges touching those entities.
 
         MIN_SIMILARITY cuts noise from the whole graph only. An anchored edge is already about an entity the question
         names, so it is ranked without the floor: "위유준의 취미는?" scored 0.586 against "위유준은 농구를 한다." and,
@@ -515,19 +571,30 @@ class Graph:
         keyword = [r[0] for r in conn.execute(
             f'SELECT e.uuid FROM edge_text JOIN edges e ON e.id=edge_text.rowid WHERE edge_text MATCH ? AND {scope}'
             ' ORDER BY bm25(edge_text) LIMIT ?',[query,*params,2*limit])] if query else []
-        # ponytail: every candidate's embedding is read and compared (~90 ms per 10k edges); cache the matrix
-        # per projection revision if graphs grow far beyond that.
         rows = conn.execute(f'SELECT e.uuid,e.embedding FROM edges e WHERE {scope} AND e.embedding IS NOT NULL',
                             params).fetchall()
-        similar = []
-        if rows:
-            matrix = np.frombuffer(b''.join(r[1] for r in rows),dtype=np.float32).reshape(len(rows),-1)
-            norms = np.linalg.norm(matrix,axis=1)*np.linalg.norm(vector)
-            scores = np.divide(matrix@vector,norms,out=np.zeros(len(rows),dtype=np.float32),where=norms>0)
-            floor = -1 if anchors else MIN_SIMILARITY
-            order = [i for i in np.argsort(-scores,kind='stable')[:2*limit] if scores[i] > floor]
-            similar = [rows[i][0] for i in order]
-        return fuse(keyword,similar)[:limit]
+        return keyword, self._similar(rows,vector,2*limit,-1 if anchors else MIN_SIMILARITY)
+
+    def _rank_statements(self, conn, group, text, vector, limit):
+        """'episode:<uuid>' ids of memories without edges, by keyword and by similarity of their statements."""
+        query = keyword_query(text)
+        keyword = ['episode:'+r[0] for r in conn.execute(
+            'SELECT uuid FROM episode_text WHERE episode_text MATCH ? AND graph=? ORDER BY bm25(episode_text) LIMIT ?',
+            (query,group,2*limit))] if query else []
+        rows = conn.execute('SELECT uuid,embedding FROM episodes WHERE graph=? AND embedding IS NOT NULL',(group,)).fetchall()
+        return keyword, ['episode:'+u for u in self._similar(rows,vector,2*limit,MIN_SIMILARITY)]
+
+    @staticmethod
+    def _similar(rows, vector, count, floor):
+        """Ids of (id, embedding) rows above floor, most similar first, at most count."""
+        # ponytail: every candidate's embedding is read and compared (~90 ms per 10k edges); cache the matrix
+        # per projection revision if graphs grow far beyond that.
+        if not rows:
+            return []
+        matrix = np.frombuffer(b''.join(r[1] for r in rows),dtype=np.float32).reshape(len(rows),-1)
+        norms = np.linalg.norm(matrix,axis=1)*np.linalg.norm(vector)
+        scores = np.divide(matrix@vector,norms,out=np.zeros(len(rows),dtype=np.float32),where=norms>0)
+        return [rows[i][0] for i in np.argsort(-scores,kind='stable')[:count] if scores[i] > floor]
 
     def delete_previous(self, group, owner):
         """Delete a graph this DB created under its former path (the DB was moved; the old path is gone). It lives
@@ -549,7 +616,7 @@ class Graph:
     def _delete(self, group, path=None):
         """Remove one graph; returns how many graphs the file still holds."""
         with self._db(path) as conn:
-            for table in ('edges','entities','episodes'):
+            for table in ('edges','entities','episodes','episode_text'):
                 conn.execute(f'DELETE FROM {table} WHERE graph=?',(group,))
             conn.execute('DELETE FROM graphs WHERE name=?',(group,))
             return conn.execute('SELECT count(*) FROM graphs').fetchone()[0]

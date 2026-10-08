@@ -124,7 +124,7 @@ def test_trace_ties_every_step_to_the_input(tmp_path,monkeypatch):
             api.log_call('graph_ingest','nomic-embed-text',3,usage={'embed_tokens':7,'requests':1})
             return mapping
     replies={'respond':'서울이군요. [e:happy]','memory_evaluate':json.dumps({'verdicts':[{'index':0,'verdict':'accept'}]})}
-    def fake_claude(purpose,model,system,prompt,thinking=False,turn_id=None):
+    def fake_claude(purpose,model,system,prompt,turn_id=None):
         if purpose=='memory_extract':
             user=next(m for m in json.loads(prompt) if m['role']=='user')
             reply=json.dumps({'claims':[{'statement':'사용자는 서울에 산다.','holder':'사용자','kind':'profile','importance':5,
