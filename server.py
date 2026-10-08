@@ -1,4 +1,4 @@
-"""Local conversation HTTP server. Memory policy lives in memory/, KG in MemoryEngine."""
+"""Local conversation HTTP server. Memory policy and the knowledge graph live in memory/."""
 import collections
 import contextlib
 import json
@@ -180,8 +180,8 @@ def as_json(text, fallback=None):
 
 
 def graph_model(system, prompt, model):
-    """MemoryEngine's LLM calls (memory_engine ClaudeCLIClient) on the same metered, isolated transport."""
-    return claude("memory_engine", model, system, prompt)[0]
+    """The graph's relation judge (memory/graph.py _judge) on the same metered, isolated transport."""
+    return claude("graph_judge", model, system, prompt)[0]
 
 
 def memory_model(purpose, model, system, prompt):
@@ -482,17 +482,7 @@ class Handler(BaseHTTPRequestHandler):
 
 
 
-FALKOR_SERVICE = os.environ.get('PHRO_FALKOR_SERVICE','phro-falkor')
 NO_WINDOW = getattr(subprocess,'CREATE_NO_WINDOW',0)
-
-
-def falkor_up(port):
-    import socket
-    try:
-        with socket.create_connection(('127.0.0.1',port),timeout=1.5) as s:
-            s.sendall(b'PING\r\n'); return s.recv(16).startswith(b'+PONG')
-    except OSError:
-        return False
 
 
 def listening(port):
@@ -502,19 +492,6 @@ def listening(port):
             return True
     except OSError:
         return False
-
-
-def falkor_service(distro, action):
-    """systemctl start/stop of FalkorDB inside WSL (as root; `wsl -u root` needs no password)."""
-    try:
-        done = subprocess.run(['wsl.exe','-d',distro,'-u','root','--','systemctl',action,FALKOR_SERVICE],
-                              capture_output=True,timeout=60,creationflags=NO_WINDOW)
-    except (OSError,subprocess.TimeoutExpired) as exc:
-        print(f'FalkorDB {action} failed: {exc}',file=sys.stderr,flush=True); return False
-    if done.returncode:
-        print(f'FalkorDB {action} failed ({done.returncode}): {done.stderr.decode("utf-8","replace").strip()}',
-              file=sys.stderr,flush=True)
-    return done.returncode == 0
 
 
 def start_ollama(port):
@@ -530,43 +507,6 @@ def start_ollama(port):
     return subprocess.Popen([exe,'serve'],env={**os.environ,'OLLAMA_HOST':f'127.0.0.1:{port}'},
                             stdin=subprocess.DEVNULL,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,
                             creationflags=NO_WINDOW)
-
-
-def hold_wsl(distro, port):
-    """Keep the WSL distro that runs FalkorDB alive while this server runs, with FalkorDB started in it.
-
-    WSL stops a distro seconds after its last Windows-side process exits; systemd services do not count.
-    `cat` exits on stdin EOF, so the session also ends when this process dies, however it dies.
-    The service is enabled and starts when the distro boots; the explicit start covers a distro that stayed up
-    after an earlier phro-secretary stopped it. Graph unavailability is not fatal: retrieval reports degraded and graph
-    jobs retry.
-    """
-    ping = lambda: falkor_up(port)
-    def keep():
-        while True:
-            try:
-                session = subprocess.Popen(['wsl.exe','-d',distro,'--','sh','-c','exec cat >/dev/null'],
-                    stdin=subprocess.PIPE,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,
-                    creationflags=NO_WINDOW)
-            except OSError as exc:
-                print(f'WSL session unavailable: {exc}',file=sys.stderr,flush=True); return
-            falkor_service(distro,'start')
-            # wsl --shutdown or suspend/resume can end the session; reopen it.
-            code = session.wait()
-            print(f'WSL session exited ({code}); reopening',file=sys.stderr,flush=True)
-            time.sleep(5)
-    def report():
-        for _ in range(30):
-            if ping():
-                print('FalkorDB ready',flush=True); return
-            time.sleep(1)
-        # Separate "server down inside WSL" from "Windows localhost forwarding broken".
-        inner = subprocess.run(['wsl.exe','-d',distro,'--','redis-cli','-p',str(port),'PING'],capture_output=True,text=True,
-                               creationflags=getattr(subprocess,'CREATE_NO_WINDOW',0)).stdout
-        print(f'FalkorDB answers inside WSL but not on Windows 127.0.0.1:{port} (WSL localhost forwarding)' if 'PONG' in inner
-              else f'FalkorDB not answering inside WSL {distro}; check phro-falkor.service',file=sys.stderr,flush=True)
-    threading.Thread(target=keep,name='wsl-session',daemon=True).start()
-    threading.Thread(target=report,name='falkor-ready',daemon=True).start()
 
 
 def lock_database(path):
@@ -591,7 +531,7 @@ def lock_database(path):
 
 
 def kill_children_with_me():
-    """Windows: put this process in a kill-on-close job so Claude CLI and WSL children die with it.
+    """Windows: put this process in a kill-on-close job so Claude CLI and Ollama children die with it.
 
     Without it, stopping a standalone server (Task Manager, kill) orphans in-flight `claude` calls.
     Under Electron, libuv already places the backend in such a job; nesting is supported on Windows 8+.
@@ -627,14 +567,8 @@ def main(handler=Handler):
     global MEMORY
     db_lock = lock_database(db_path())
     job = kill_children_with_me()
-    # Empty PHRO_WSL_DISTRO = FalkorDB is managed elsewhere.
-    distro = os.environ.get('PHRO_WSL_DISTRO','Ubuntu-24.04' if os.name=='nt' else '')
-    config = GraphConfig.environment()
-    # Stop on exit only what this server started: a FalkorDB or Ollama already running belongs to someone else.
-    own_falkor = bool(distro) and not falkor_up(config.falkor_port)
-    if distro:
-        hold_wsl(distro,config.falkor_port)
-    ollama = start_ollama(config.ollama_port)
+    # Stop on exit only what this server started: an Ollama already running belongs to someone else.
+    ollama = start_ollama(GraphConfig.environment().ollama_port)
     store = Store(db_path())
     graph = Graph(store.path,audit=log_call,llm=graph_model if CLAUDE else None)
     MEMORY = MemoryService(store,graph,memory_model if CLAUDE else None).start()
@@ -651,8 +585,6 @@ def main(handler=Handler):
                 ollama.wait(10)
             except subprocess.TimeoutExpired:
                 ollama.kill()
-        if own_falkor:
-            falkor_service(distro,'stop')  # graceful: FalkorDB flushes its AOF before the distro idles out
         print('phro-secretary stopped',flush=True)
 
 

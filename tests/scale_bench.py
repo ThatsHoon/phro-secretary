@@ -1,6 +1,6 @@
 """Manual scale bench: does the memory layer stay incremental at thousands of memories?
 
-Grows one synthetic DB (real FalkorDB + Ollama, no Claude) to --target confirmed memories with verified relations,
+Grows one synthetic DB (real SQLite graph + Ollama, no Claude) to --target confirmed memories with verified relations,
 then measures at that size: build throughput of the added batch, retrieval latency and recall, forget / restore /
 add as incremental graph updates, and the SQLite-side reads the UI polls. Re-run with a larger --target on the
 same --db to grow it; each run appends one JSON line to --out.
@@ -10,6 +10,7 @@ same --db to grow it; each run appends one JSON line to --out.
 """
 import argparse
 import json
+import os
 import random
 import statistics
 import sys
@@ -85,12 +86,13 @@ def pct(values, q):
 
 
 def graph_size(graph, group):
-    from redis import Redis
-    with Redis(port=graph.config.falkor_port) as r:
-        nodes = r.execute_command('GRAPH.RO_QUERY', group, 'MATCH (n) RETURN count(n)')[1][0][0]
-        edges = r.execute_command('GRAPH.RO_QUERY', group, 'MATCH ()-[e]->() RETURN count(e)')[1][0][0]
-        used = r.info('memory')['used_memory']
-    return {'nodes': nodes, 'edges': edges, 'falkor_used_mb': round(used / 2**20, 1)}
+    import os
+    import sqlite3
+    from contextlib import closing
+    with closing(sqlite3.connect(graph.path)) as conn:
+        nodes = conn.execute('SELECT count(*) FROM entities WHERE graph=?', (group,)).fetchone()[0]
+        edges = conn.execute('SELECT count(*) FROM edges WHERE graph=?', (group,)).fetchone()[0]
+    return {'nodes': nodes, 'edges': edges, 'graph_file_mb': round(os.path.getsize(graph.path) / 2**20, 1)}
 
 
 def main():
@@ -105,20 +107,17 @@ def main():
     from memory.graph import Graph
     from memory.service import MemoryService
     from memory.store import Store
-    server.hold_wsl('Ubuntu-24.04', 6379)
-    time.sleep(8)
+    server.start_ollama(11434)
     store = Store(args.db)
     usage = []
     graph = Graph(store.path, audit=lambda purpose, model, ms, **k: usage.append(k.get('usage') or {}))
     service = MemoryService(store, graph)
     try:
         if args.cleanup:
-            from redis import Redis
-            with Redis(port=graph.config.falkor_port) as r:
-                for name in r.execute_command('GRAPH.LIST'):
-                    if name.decode().startswith(graph.prefix):
-                        r.execute_command('GRAPH.DELETE', name)
-            print('deleted graphs of', store.path)
+            for suffix in ('', '-wal', '-shm'):
+                if os.path.exists(graph.path + suffix):
+                    os.remove(graph.path + suffix)
+            print('deleted graph file of', store.path)
             return
         names = people()
         with store.connect() as conn:

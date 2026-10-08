@@ -2,7 +2,7 @@
 const STAGES = {
   retrieve_client: '인출 (화면 표시용)', retrieve_respond: '인출 (답변 근거)', graph_search: '그래프 검색',
   respond: '답변 생성', memory_extract: '기억 추출', memory_extract_skipped: '기억 추출 생략 (규칙)', memory_evaluate: '독립 검증',
-  graph_ingest: '그래프 반영', graph_remove: '그래프에서 제거', memory_engine: '메모리 엔진 판정 (Claude)',
+  graph_ingest: '그래프 반영', graph_remove: '그래프에서 제거', graph_judge: '관계 판정 (Claude)',
   rolling_summary: '대화 요약', relations_backfill: '관계 소급 분석', relations_check: '관계 소급 검증',
 };
 // Outcomes are stored as stable English identifiers (memory/trace.py); shown in Korean here.
@@ -103,7 +103,7 @@ load();
 // Expansion candidates (GET /vocabulary): relations outside the vocabulary and how Claude settled them.
 const JUDGED = {contradicts: '대체', coexists: '누적', first: '첫 등장', negation: '부정 짝', unjudged: '판정 안 됨',
   'pair-duplicate': '다른 관계와 중복', 'pair-contradicts': '다른 관계와 모순', 'pair-coexists': '다른 관계와 공존',
-  'engine-extracted': '메모리 엔진이 직접 이름 붙임'};
+  'engine-extracted': '이전 자동 추출이 이름 붙임'};
 const KIND = {single: '대체 (새 값이 이전 값을 바꿈)', multi: '누적 (값이 쌓임)'};
 
 async function post(path, body) {

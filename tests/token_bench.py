@@ -1,6 +1,6 @@
 """Manual bench: where a conversation turn spends tokens and time, and what the second retrieval costs.
 
-Runs the real server on a synthetic DB with real FalkorDB+Ollama and the stand-in `claude` (no account cost),
+Runs the real server on a synthetic DB with the real SQLite graph + Ollama and the stand-in `claude` (no account cost),
 seeds N confirmed memories with relations, waits for the graph, then drives turns the way the client does
 (/retrieve -> /respond -> /commit). Reads llm_calls back and prints per-purpose and per-turn totals.
 Claude token counts from the stand-in are placeholders; real ones come from tests/scenario_full.py.
@@ -9,7 +9,6 @@ Claude token counts from the stand-in are placeholders; real ones come from test
 Graphs this DB created are deleted at the end.
 """
 import argparse
-import asyncio
 import base64
 import json
 import os
@@ -96,16 +95,10 @@ def report(db, seeded_at, turn_ids):
 
 
 def cleanup_graphs(db):
-    from memory.graph import Graph
-    from redis.asyncio import Redis
-    graph = Graph(db)
-    async def go():
-        async with Redis(port=graph.config.falkor_port) as r:
-            for name in await r.execute_command('GRAPH.LIST'):
-                if name.decode().startswith(graph.prefix):
-                    await r.execute_command('GRAPH.DELETE', name)
-    graph._run(go())
-    graph.close()
+    from memory.graph import graph_path
+    for suffix in ('', '-wal', '-shm'):
+        if os.path.exists(graph_path(db) + suffix):
+            os.remove(graph_path(db) + suffix)
 
 
 def main():

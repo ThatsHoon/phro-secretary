@@ -1,6 +1,6 @@
 // Desktop E2E on a synthetic DB, isolated Electron profile and a stand-in `claude` (no account, no cost).
 // Run from the repo root on Windows: node tests/e2e_desktop.mjs
-// Claude results are always the stand-in (tests/fake_claude); the graph is real only if FalkorDB+Ollama are up,
+// Claude results are always the stand-in (tests/fake_claude); the graph is real only if Ollama is up,
 // and the report says which. Exit code 1 if any check fails.
 import {spawn, execFileSync} from 'node:child_process';
 import {mkdtempSync, mkdirSync, rmSync, readFileSync, writeFileSync, existsSync} from 'node:fs';
@@ -218,17 +218,7 @@ try {
   check('e2e run', false, error.stack);
 } finally {
   if (app && app.exitCode === null) await quit();
-  // Graphs this synthetic DB created belong to it alone.
-  try {
-    execFileSync(python, ['-c', `import sys;sys.path.insert(0,r'${root}');from memory.graph import Graph;from memory.store import Store
-import asyncio;from redis.asyncio import Redis
-g=Graph(Store(r'${db}').path)
-async def go():
-    async with Redis(port=g.config.falkor_port) as r:
-        for n in await r.execute_command('GRAPH.LIST'):
-            if n.decode().startswith(g.prefix): await r.execute_command('GRAPH.DELETE',n)
-g._run(go());g.close()`], {stdio: 'ignore'});
-  } catch {}
+  // The synthetic DB and its graph file (memory.graph.db beside it) live in tmp.
   rmSync(tmp, {recursive: true, force: true, maxRetries: 5, retryDelay: 500});
   const failed = results.filter(r => !r.ok).length;
   console.log(`${results.length - failed}/${results.length} desktop E2E checks passed`);

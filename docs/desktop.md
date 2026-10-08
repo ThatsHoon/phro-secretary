@@ -36,14 +36,12 @@ Electron이 백엔드(`serve.py`, 8771)를 직접 시작·종료한다. 같은 �
 | 구성 요소 | 시작 | 종료 |
 |---|---|---|
 | 백엔드(`serve.py`) | Electron | Electron이 `POST /shutdown`(실행마다 새 토큰, 헤더 `X-Phro-Shutdown`). 30초 넘으면 강제 종료 |
-| WSL 세션(`wsl.exe ... cat`) | 백엔드 | 백엔드와 함께 |
-| FalkorDB(`phro-falkor` 서비스) | distro 부팅 시 + `systemctl start` | **백엔드가 켰을 때만** `systemctl stop`(AOF 기록). 이미 떠 있던 것은 둔다 |
 | Ollama(`ollama serve`) | 11434가 비어 있으면 백엔드 | **백엔드가 켰을 때만** 종료 |
 | Claude CLI | 호출마다 | 호출 종료 또는 백엔드와 함께 |
 
 강제 종료·크래시에도 남는 프로세스가 없다: Electron의 자식은 libuv kill-on-close job, 백엔드의 자식은 백엔드가 만든 job
-(`kill_children_with_me`)에 들어 있다. WSL VM은 WSL 자체 유휴 시간(약 1분) 뒤 내려간다.
-최초 1회 설치(WSL `phro-falkor` 서비스, Ollama + `nomic-embed-text`, Claude CLI 로그인)는 필요하다. 첫 실행 15초 뒤 빠진 구성 요소를 알려 준다.
+(`kill_children_with_me`)에 들어 있다. 지식그래프는 같은 프로세스 안의 SQLite 파일이라 따로 켜고 끌 것이 없다.
+최초 1회 설치(Ollama + `nomic-embed-text`, Claude CLI 로그인, `setup.ps1`)는 필요하다. 첫 실행 15초 뒤 빠진 구성 요소를 알려 준다.
 
 ## 오버레이
 
@@ -70,10 +68,10 @@ npm run dist
 
 `build-python.mjs`가 python.org embeddable CPython 3.12.10(해시 고정)에 런타임 패키지(requirements.txt에서 pytest 제외)를 넣고,
 pip 실행 파일(`site-packages/bin`)은 지운다(빌드 PC 경로가 박힘). electron-builder가 `build/dist/phro-secretary Setup 0.1.0.exe`
-(사용자별 설치, 약 131MB)를 만든다. 실행 중인 phro-secretary가 `win-unpacked`를 잠그므로 빌드 전에 앱을 끈다.
+(사용자별 설치, 약 130MB)를 만든다. 실행 중인 phro-secretary가 `win-unpacked`를 잠그므로 빌드 전에 앱을 끈다.
 앱 설정(userData)은 `%APPDATA%\phro-secretary`다. 이전 이름(Phro-AI)으로 설치했던 위치·크기·가져온 캐릭터는 따라오지 않으니
 다시 설정하거나 `%APPDATA%\Phro-AI`의 `overlay.json`, `pets/`를 옮긴다. 기억 DB(`%LOCALAPPDATA%\phro-demo`)는 그대로 쓴다.
-포함: 백엔드 소스, `memory_engine/`(LICENSE·NOTICE 포함), Python. 미포함: 커뮤니티 시트, Claude CLI, FalkorDB, Ollama.
+포함: 백엔드 소스, Python(numpy). 미포함: 커뮤니티 시트, Claude CLI, Ollama.
 
 서명 없이 배포한다. 받는 사람에게 함께 전할 것:
 - SHA-256: `Get-FileHash "build\dist\phro-secretary Setup 0.1.0.exe"` 값을 설치 파일과 다른 경로로 보내 대조하게 한다.

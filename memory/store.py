@@ -126,8 +126,8 @@ class Store:
             for column in ('turns','outcome'):
                 if column not in calls:
                     conn.execute('ALTER TABLE llm_calls ADD COLUMN '+column+' TEXT')
-            # Labels written before the graph library became memory_engine (installs from 2026-10-05 on).
-            conn.execute("UPDATE llm_calls SET purpose='memory_engine' WHERE purpose='graphiti'")
+            # Labels of the relation judge from the earlier graph libraries (graphiti, then memory_engine).
+            conn.execute("UPDATE llm_calls SET purpose='graph_judge' WHERE purpose IN ('graphiti','memory_engine')")
             conn.execute("UPDATE relation_observations SET judgement='engine-extracted' WHERE judgement='graphiti-extracted'")
             conn.execute('INSERT OR IGNORE INTO runtime(id,epoch) VALUES(1,?)', (uuid.uuid4().hex,))
 

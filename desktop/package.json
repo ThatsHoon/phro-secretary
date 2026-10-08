@@ -46,15 +46,6 @@
         ]
       },
       {
-        "from": "../memory_engine",
-        "to": "phro/memory_engine",
-        "filter": [
-          "**/*.py",
-          "LICENSE",
-          "NOTICE.md"
-        ]
-      },
-      {
         "from": ".",
         "to": "phro/desktop",
         "filter": [

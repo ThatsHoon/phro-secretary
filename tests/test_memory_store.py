@@ -124,9 +124,9 @@ def test_forgetting_keeps_memories_confirmed_in_later_dependent_turns(tmp_path):
 def test_reopen_renames_graph_library_labels(tmp_path):
     store = Store(tmp_path / 'memory.db')
     with store.connect() as conn:
-        conn.execute("INSERT INTO llm_calls(purpose,model,ms) VALUES('graphiti','haiku',1)")
+        conn.execute("INSERT INTO llm_calls(purpose,model,ms) VALUES('graphiti','haiku',1),('memory_engine','haiku',1)")
         conn.execute("INSERT INTO relation_observations(relation,memory_id,judgement,observed_at) VALUES('DRIVES',1,'graphiti-extracted','2026-10-05')")
     store = Store(tmp_path / 'memory.db')
     with store.connect() as conn:
-        assert conn.execute('SELECT purpose FROM llm_calls').fetchone()[0] == 'memory_engine'
+        assert {r[0] for r in conn.execute('SELECT purpose FROM llm_calls')} == {'graph_judge'}
         assert conn.execute('SELECT judgement FROM relation_observations').fetchone()[0] == 'engine-extracted'

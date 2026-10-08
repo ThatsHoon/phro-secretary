@@ -12,8 +12,8 @@ const shutdownToken=require('node:crypto').randomBytes(24).toString('hex');
 app.whenReady().then(async () => {
   if (!Number.isInteger(port) || port < 1024 || port > 65535) throw Error('Invalid desktop port');
   // Own the backend lifecycle; never attach silently to an unrelated process/database.
-  // The backend starts what it needs and stops what it started (server.main): the WSL session that keeps
-  // FalkorDB up, FalkorDB itself, Ollama; Claude CLI calls are its children. POST /shutdown with this run's token
+  // The backend starts what it needs and stops what it started (server.main): Ollama, unless it already ran;
+  // Claude CLI calls are its children. POST /shutdown with this run's token
   // is the quit signal (not a stdin pipe: on Windows a thread blocked reading stdin deadlocks subprocess spawning).
   backend = spawn(python(), [path.join(root,'desktop','serve.py')], {cwd:root, windowsHide:true,
     env:{...process.env, PYTHONIOENCODING:'utf-8', PHRO_PETS_DIR:petsDir(), PHRO_SHUTDOWN_TOKEN:shutdownToken},
@@ -195,7 +195,7 @@ async function firstRun(reload){
   const health=await (await fetch(origin+'/health')).json();
   const problems=[];
   if(!health.claude)problems.push('Claude Code CLI(claude)를 PATH에서 찾지 못했습니다. 설치·로그인 후 다시 시작하세요. 답변과 기억 저장이 동작하지 않습니다.');
-  if(health.memory?.error)problems.push(`지식그래프 연결 오류(${health.memory.error}): phro-secretary가 자동으로 켜는 WSL Ubuntu-24.04의 FalkorDB(phro-falkor 서비스, 6379)와 Ollama(11434, nomic-embed-text 모델)가 설치돼 있어야 합니다.`);
+  if(health.memory?.error)problems.push(`지식그래프 연결 오류(${health.memory.error}): Ollama(11434)와 nomic-embed-text 모델이 설치돼 있어야 합니다(setup.ps1). phro-secretary가 Ollama를 자동으로 켭니다.`);
   if(problems.length)dialog.showMessageBox({type:'warning',title:'phro-secretary',message:'준비되지 않은 구성 요소가 있습니다',detail:problems.join('\n\n')});
 }
 function petsDir(){return path.join(app.getPath('userData'),'pets');}
@@ -217,7 +217,7 @@ function loadSettings(){
 function saveSettings(s){try{fs.writeFileSync(settingsFile(),JSON.stringify(s));}catch(err){console.error(err.message);}}
 app.on('will-quit',()=>globalShortcut.unregisterAll());
 app.on('window-all-closed',()=>app.quit());
-// Quit waits for the backend's own shutdown (worker, Ollama, FalkorDB) with the windows already gone; a backend
+// Quit waits for the backend's own shutdown (worker, Ollama) with the windows already gone; a backend
 // that does not finish in time is killed, and its kill-on-close job still takes its children with it.
 let stopping=false;
 app.on('before-quit',e=>{

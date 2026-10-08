@@ -50,19 +50,18 @@ TURNS = [  # (name, user text, what it exercises)
 
 
 def facts(graph, group):
-    from redis import Redis
+    import sqlite3
+    from contextlib import closing
     if not group:
         return []
-    with Redis(port=graph.config.falkor_port) as redis:
-        rows = redis.execute_command('GRAPH.RO_QUERY', group, 'MATCH (s:Entity)-[e:RELATES_TO]->(t:Entity) '
-                                     'RETURN s.name, e.name, t.name, e.invalid_at IS NULL')[1]
-    text = lambda v: v.decode() if isinstance(v, bytes) else v
-    return sorted(f"{text(s)} -{text(r)}-> {text(o)}{'' if text(v) in ('true', 1, True) else ' (무효)'}" for s, r, o, v in rows)
+    with closing(sqlite3.connect(graph.path)) as conn:
+        rows = conn.execute('SELECT s.name, e.name, t.name, e.invalid_at IS NULL FROM edges e JOIN entities s'
+                            ' ON s.uuid=e.source JOIN entities t ON t.uuid=e.target WHERE e.graph=?', (group,)).fetchall()
+    return sorted(f"{s} -{r}-> {o}{'' if v else ' (무효)'}" for s, r, o, v in rows)
 
 
 def main():
-    api.hold_wsl('Ubuntu-24.04', 6379)
-    time.sleep(8)
+    api.start_ollama(11434)
     output = Path(os.getenv('PHRO_SCENARIO_REPORT', str(Path(tempfile.gettempdir()) / 'phro_scenario_full.json')))
     report = {'started': time.strftime('%Y-%m-%d %H:%M:%S'), 'real_claude': True, 'steps': [], 'checks': []}
     temporary = tempfile.TemporaryDirectory(prefix='phro-full-')
@@ -271,11 +270,6 @@ def main():
         server.shutdown()
         server.server_close()
         thread.join()
-        from redis import Redis
-        with Redis(port=graph.config.falkor_port) as redis:
-            for name in redis.execute_command('GRAPH.LIST'):
-                if name.decode().startswith(graph.prefix):
-                    redis.execute_command('GRAPH.DELETE', name)
         service.close()
         report['finished'] = time.strftime('%Y-%m-%d %H:%M:%S')
         save()

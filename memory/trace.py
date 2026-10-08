@@ -1,8 +1,7 @@
 """Which conversation turns the current work serves, so every audited call traces back to the input behind it.
 
-A context variable reaches everywhere the work goes: into the graph event loop (run_coroutine_threadsafe runs
-the coroutine in a copy of the caller's context) and into asyncio.to_thread, so Claude calls MemoryEngine makes are
-attributed to the same turns. Outcomes are ids, counts and the next stage only; never prompt or reply text.
+A context variable follows the work through the calling thread, so the graph's Claude calls (memory/graph.py
+runs in its caller's thread) are attributed to the same turns. Outcomes are ids, counts and the next stage only; never prompt or reply text.
 """
 from contextlib import contextmanager
 from contextvars import ContextVar

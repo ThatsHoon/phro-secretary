@@ -1,37 +1,16 @@
-"""Opt-in local synthetic MemoryEngine integration; never opens a production memory DB."""
+"""Opt-in local graph integration (real Ollama embeddings); never opens a production memory DB."""
 import os
+from contextlib import closing
 import json
 import threading
 from urllib.request import Request,urlopen
-import asyncio
 import pytest
 import server as api
 from memory.store import Store
 from memory.graph import Graph
 from memory.service import MemoryService
 
-def test_claude_client_answers_engine_prompts():
-    # memory_engine: the engine's prompt goes to the transport, the JSON after any reasoning comes back validated.
-    from memory_engine.llm_client.claude_cli_client import ClaudeCLIClient
-    from memory_engine.llm_client.config import ModelSize
-    from memory_engine.prompts import prompt_library
-    from memory_engine.prompts.dedupe_edges import EdgeDuplicate
-    seen=[]
-    def transport(system,prompt,model):
-        seen.append((system,prompt,model))
-        return 'idx 1 is the old job [1]. {"note": {"x": 1}} {"duplicate_facts": [], "contradicted_facts": [1]}'
-    client=ClaudeCLIClient(transport)
-    context={'existing_edges':[{'idx':0,'fact':'a'}],'edge_invalidation_candidates':[{'idx':1,'fact':'b'}],'new_edge':'c'}
-    answer=asyncio.run(client.generate_response(prompt_library.dedupe_edges.resolve_edge(context),
-                                                response_model=EdgeDuplicate,model_size=ModelSize.small))
-    assert answer=={'duplicate_facts':[],'contradicted_facts':[1]}
-    system,prompt,model=seen[0]
-    assert model=='haiku' and 'deduplication' in system and '<NEW FACT>' in prompt and 'contradicted_facts' in prompt
-    bad=ClaudeCLIClient(lambda *a:'no json here')
-    with pytest.raises(ValueError):
-        asyncio.run(bad.generate_response(prompt_library.dedupe_edges.resolve_edge(context),response_model=EdgeDuplicate))
-
-@pytest.mark.skipif(os.getenv('PHRO_LIVE_TEST')!='1',reason='set PHRO_LIVE_TEST=1 for local Ollama/FalkorDB test')
+@pytest.mark.skipif(os.getenv('PHRO_LIVE_TEST')!='1',reason='set PHRO_LIVE_TEST=1 for local Ollama test')
 def test_real_graph_roundtrip(tmp_path,monkeypatch):
     store=Store(tmp_path/'live.db'); graph=Graph(store.path)
     def admission(purpose,model,system,prompt):
@@ -141,14 +120,13 @@ def test_korean_verified_relations_are_retrievable(tmp_path):
 
 def facts(graph, group):
     """(subject, relation, object, valid, fact) rows and entity names of a live projection."""
-    from redis import Redis
-    with Redis(port=graph.config.falkor_port) as redis:
-        edges = redis.execute_command('GRAPH.RO_QUERY', group, 'MATCH (s:Entity)-[e:RELATES_TO]->(t:Entity) '
-                                      'RETURN s.name, e.name, t.name, e.invalid_at IS NULL, e.fact')[1]
-        names = redis.execute_command('GRAPH.RO_QUERY', group, 'MATCH (n:Entity) RETURN n.name')[1]
-    text = lambda v: v.decode() if isinstance(v, bytes) else v
-    rows = {(text(s), text(r), text(o), text(valid) in ('true', 1, True), text(fact)) for s, r, o, valid, fact in edges}
-    return rows, {text(row[0]) for row in names}
+    import sqlite3
+    with closing(sqlite3.connect(graph.path)) as conn:
+        rows = {(s, r, o, valid == 1, fact) for s, r, o, valid, fact in conn.execute(
+            'SELECT s.name, e.name, t.name, e.invalid_at IS NULL, e.fact FROM edges e JOIN entities s ON s.uuid=e.source'
+            ' JOIN entities t ON t.uuid=e.target WHERE e.graph=?', (group,))}
+        names = {n for (n,) in conn.execute('SELECT name FROM entities WHERE graph=?', (group,))}
+    return rows, names
 
 @pytest.mark.skipif(os.getenv('PHRO_LIVE_TEST')!='1',reason='local model integration opt-in')
 def test_forgetting_is_incremental_and_matches_a_rebuild(tmp_path):
@@ -168,7 +146,7 @@ def test_forgetting_is_incremental_and_matches_a_rebuild(tmp_path):
         edges,_=facts(graph,group)
         print('BEFORE',sorted(edges),flush=True)
         assert ('사용자','LIVES_IN','서울',False,'사용자는 서울에 살고 있다.') in edges  # superseded by 부산
-        # Two wordings of one fact: MemoryEngine may merge them into one edge with two sources, or keep two edges.
+        # Two wordings of one fact (the same triple) share one edge with two sources.
         shared=len([e for e in edges if e[:3]==('지연','LIKES','커피')])==1
         # Forgetting the correction, the first wording of a shared fact, and a fact with its own entities.
         store.forget([busan]); store.forget([coffee]); store.forget([cat])
@@ -229,49 +207,45 @@ def test_forgetting_a_middle_correction_and_restoring_it(tmp_path):
 @pytest.mark.skipif(os.getenv('PHRO_LIVE_TEST')!='1',reason='local model integration opt-in')
 def test_moved_or_copied_database_adopts_its_graph(tmp_path):
     import shutil, sqlite3
-    from redis import Redis
-    from memory.graph import prefix_for
-    def graphs():
-        with Redis(port=6379) as r: return {n.decode() for n in r.execute_command('GRAPH.LIST')}
+    from memory.graph import graph_path
+    def graphs(db):
+        if not os.path.exists(graph_path(db)): return set()
+        with closing(sqlite3.connect(graph_path(db))) as conn: return {n for (n,) in conn.execute('SELECT name FROM graphs')}
     def open_db(path):
         store=Store(path); return store,MemoryService(store,Graph(store.path))
     origin=tmp_path/'origin.db'; store,service=open_db(origin)
-    prefixes=set()
     try:
         turn=store.record_turn('a','사용자는 서울에 살고 있다.','알겠습니다.')
         relation={'subject':'사용자','subject_type':'Person','relation':'LIVES_IN','object':'서울','object_type':'Place'}
         mid=store.confirm([dict(statement='사용자는 서울에 살고 있다.',source_ids=[turn['user_message']],relations=[relation])],store.epoch())[0]
-        original=service.tick()['group']; prefixes.add(prefix_for(store.path)); service.close()
+        original=service.tick()['group']; service.close()
         # A copy (backup restored elsewhere): the original still needs its graph, so it is left in place.
         copy=tmp_path/'copy.db'
         src,dst=sqlite3.connect(origin),sqlite3.connect(copy)
         src.backup(dst); src.close(); dst.close()
-        store,service=open_db(copy); prefixes.add(prefix_for(store.path))
+        store,service=open_db(copy)
         step=service.tick()
-        assert step['rebuild'] and step['group']!=original and original in graphs()
+        assert step['rebuild'] and step['group']!=original and original in graphs(origin)
         assert any(m['id']==mid for m in service.retrieve('사용자는 어디 살아?')['memories'])
         service.close()
         # A move: the old path is gone, so the graph it named is deleted and a new one built.
         moved=tmp_path/'moved'/'origin.db'; moved.parent.mkdir()
         for suffix in ('','-wal','-shm'):
             if os.path.exists(str(origin)+suffix): shutil.move(str(origin)+suffix,str(moved)+suffix)
-        store,service=open_db(moved); prefixes.add(prefix_for(store.path))
+        store,service=open_db(moved)
         step=service.tick()
-        assert step['rebuild'] and original not in graphs()
+        assert step['rebuild'] and not os.path.exists(graph_path(origin)) and original not in graphs(moved)
         assert any(m['id']==mid for m in service.retrieve('사용자는 어디 살아?')['memories'])
         assert not service.retrieve('사용자는 어디 살아?')['degraded']
     finally:
         service.close()
-        with Redis(port=6379) as r:
-            for name in graphs():
-                if any(name.startswith(p) for p in prefixes): r.execute_command('GRAPH.DELETE',name)
 
 @pytest.mark.skipif(os.getenv('PHRO_LIVE_TEST')!='1' or os.getenv('PHRO_CLAUDE_TEST')!='1' or not api.CLAUDE,
-                    reason='paid: set PHRO_LIVE_TEST=1 PHRO_CLAUDE_TEST=1 for Claude-backed MemoryEngine calls')
+                    reason='paid: set PHRO_LIVE_TEST=1 PHRO_CLAUDE_TEST=1 for the Claude relation judge')
 def test_claude_judges_what_rules_cannot(tmp_path,monkeypatch):
     # Vocabulary relations are settled by rule (a job change supersedes, a second liking coexists); a relation
-    # outside it (DRIVES) goes to MemoryEngine's resolver on Claude; a memory without verified triples is extracted by
-    # MemoryEngine's own add_episode pipeline on Claude. No local chat model is involved.
+    # outside it (DRIVES) goes to the graph's judge on Claude; a memory without verified triples waits for the relation
+    # backfill. No local chat model is involved.
     store=Store(tmp_path/'judge.db'); graph=Graph(store.path,audit=api.log_call,llm=api.graph_model)
     service=MemoryService(store,graph); monkeypatch.setattr(api,'MEMORY',service)
     rel=lambda r,o,ot='Organization':{'subject':'사용자','subject_type':'Person','relation':r,'object':o,'object_type':ot}
@@ -298,11 +272,11 @@ def test_claude_judges_what_rules_cannot(tmp_path,monkeypatch):
         assert {c['relation']:c['judgements'] for c in service.expansion()['candidates']}['DRIVES']=={'first':1,'contradicts':1}
         service.promote('DRIVES','single')
         with store.connect() as conn:
-            before=conn.execute("SELECT COUNT(*) FROM llm_calls WHERE purpose='memory_engine'").fetchone()[0]
+            before=conn.execute("SELECT COUNT(*) FROM llm_calls WHERE purpose='graph_judge'").fetchone()[0]
         remember('car3','사용자는 이제 그랜저를 탄다.',[rel('DRIVES','그랜저','Thing')])
         groups.add(service.tick()['group'])
         with store.connect() as conn:
-            assert conn.execute("SELECT COUNT(*) FROM llm_calls WHERE purpose='memory_engine'").fetchone()[0]==before
+            assert conn.execute("SELECT COUNT(*) FROM llm_calls WHERE purpose='graph_judge'").fetchone()[0]==before
         rows,_=facts(graph,store.graph_state()['graph_group'])
         valid={(s,r,o) for s,r,o,ok,_ in rows if ok}
         assert ('사용자','DRIVES','그랜저') in valid and ('사용자','DRIVES','소나타') not in valid
@@ -313,16 +287,13 @@ def test_claude_judges_what_rules_cannot(tmp_path,monkeypatch):
         store.restore(batch)
         legacy=remember('e','민지는 대전에 산다.',None)
         groups.add(service.tick()['group'])
-        assert store.graph_state()['memory_status'][legacy]=='linked'
-        found=service.retrieve('민지는 어디 살아?')
-        print('LEGACY',found,flush=True)
-        assert any(m['id']==legacy for m in found['memories'])
+        assert store.graph_state()['memory_status'][legacy]=='missing'
         with store.connect() as conn:
-            judged=conn.execute("SELECT COUNT(*) FROM llm_calls WHERE purpose='memory_engine' AND error IS NULL").fetchone()[0]
+            judged=conn.execute("SELECT COUNT(*) FROM llm_calls WHERE purpose='graph_judge' AND error IS NULL").fetchone()[0]
             local=conn.execute("SELECT SUM(input_tokens) FROM llm_calls WHERE purpose IN ('graph_ingest','graph_remove','graph_search')").fetchone()[0]
-            # Trace reaches into the graph event loop and MemoryEngine's worker threads: judgements carry the turn.
-            rows=[dict(r) for r in conn.execute("SELECT turns,outcome FROM llm_calls WHERE purpose IN ('memory_engine','graph_ingest')")]
-        assert judged>0 and not local  # MemoryEngine's judgement ran on Claude; local sessions only embed
+            # Trace follows the projection into the graph: judgements carry the turn.
+            rows=[dict(r) for r in conn.execute("SELECT turns,outcome FROM llm_calls WHERE purpose IN ('graph_judge','graph_ingest')")]
+        assert judged>0 and not local  # the judgement ran on Claude; local sessions only embed
         assert all(r['turns'] for r in rows), rows
         assert any(r['outcome'] and 'judgement' in r['outcome'] for r in rows), rows
     finally:

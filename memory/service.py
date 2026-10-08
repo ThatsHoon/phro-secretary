@@ -1,4 +1,4 @@
-"""Confirmed-memory policy and MemoryEngine projection orchestration."""
+"""Confirmed-memory policy and knowledge graph projection orchestration."""
 from datetime import datetime, timezone
 import json
 import math
@@ -222,7 +222,8 @@ class MemoryService:
             claim['source_type'] = 'user'
             claim['pinned'] = False
             # Malformed or missing triples only cost the claim its verified edges: it is stored as unanalysed
-            # (None) and falls back to MemoryEngine extraction. An explicit [] means "no relation to record".
+            # (None), shown as missing until the relation backfill analyses it. An explicit [] means "no relation
+            # to record".
             try:
                 claim['relations'] = None if claim.get('relations') is None else clean_relations(claim['relations'])
             except ValueError:
@@ -432,9 +433,9 @@ class MemoryService:
                     score = 1/(rank+1) + memory['importance']/100 + min(recall,0.25)
                     if mid in pinned:
                         score += 100
-                    # Validity belongs to MemoryEngine: replaying a whole source statement could
+                    # Validity belongs to the graph: replaying a whole source statement could
                     # resurrect an invalidated clause or an obsolete pinned fact.
-                    selected.append({'id':mid,'text':edge['fact'],'score':score,'via':'memory_engine',
+                    selected.append({'id':mid,'text':edge['fact'],'score':score,'via':'graph',
                                      'source_memory_ids':ids,'edge_uuid':edge['uuid']})
             except Exception as exc:
                 degraded, error = True,type(exc).__name__
