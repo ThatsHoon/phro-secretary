@@ -62,6 +62,11 @@ desktop/main.cjs (Electron)
 - 사전 확장: 사전 밖 관계의 판정을 `relation_observations`에 쌓고, 처리 기록 화면 "확장 후보" 탭이 근거 5회 이상·90% 이상
   같은 판정이면 대체/누적을 추천한다. 확정은 **사용자 버튼으로만**(`/vocabulary_promote`, 되돌리기 `/vocabulary_demote`).
   확정한 관계는 `vocabulary` 테이블에 남고 다음 반영부터 규칙으로 판정한다. 대화 초기화에도 유지된다.
+- 규칙 피드백: 검증(`EVALUATE`)은 거절마다 어긴 규칙을 사유로 낸다(subject·negation·hypothetical·ambiguous·unsupported·
+  relation·date, 그 밖은 other, 판정 누락은 omitted). 사유별 개수만 검증 호출의 `outcome.reject_reasons`에 남는다(원문 없음).
+  "확장 후보" 탭이 최근 검증 200회에서 사유를 모아 3회 이상이면 **검토 필요**로 올리고 예시 입력(보관한 턴 제외)을 보인다
+  (`MemoryService.rejections`). 추출과 검증은 같은 규칙을 따르므로 반복 사유는 규칙의 빈틈이나 모델의 오독이다. 지시문은
+  자동으로 바꾸지 않는다.
 - 기억별 상태 `linked`/`no_relation`/`missing`을 기록해 `/health`의 `coverage`로 보인다. 반영 완료 ≠ 검색 가능.
 - 증분 반영: 보관·영구삭제된 기억과 관계를 다시 분석한 기억(`graph_stale`)의 에피소드만 빼고, 새 확정·복구만 넣는다.
   전체 재구축은 그래프 설정(`GraphConfig.ingestion`, 임베딩 모델) 변경, 쓰기 중 장애(pending 세대), `/reset`, 반영 실패 재시도에서만.

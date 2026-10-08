@@ -91,6 +91,34 @@ def test_admission_requires_single_accept_and_user_evidence(tmp_path):
     service.llm=lambda purpose,*args: {'claims':[claim]} if purpose=='memory_extract' else {'verdicts':[{'index':0,'verdict':'accept'}]}
     service.tick(); assert len(store.visible_memories())==1
 
+def test_rejection_reasons_are_counted_and_flagged(tmp_path):
+    from memory import trace
+    store,graph,service=setup(tmp_path)
+    def llm(purpose,model,system,prompt):
+        # Audited like server.claude: a row the trace can attach the step's outcome to.
+        with store.connect() as conn:
+            trace.record(conn.execute('INSERT INTO llm_calls(purpose,model,ms,turn_id) VALUES(?,?,0,?)',
+                                      (purpose,model,trace.turns()[0])).lastrowid)
+        if purpose=='memory_extract':
+            return {'claims':[dict(statement=f'Claim {i}.',source_ids=[turn['user_message']]) for i in range(4)]}
+        return {'verdicts':[{'index':0,'verdict':'accept'},{'index':1,'verdict':'reject','reason':'date'},
+                            {'index':2,'verdict':'reject','reason':'made up'}]}
+    service.llm=llm
+    for i in range(2):
+        turn=store.record_turn(f't{i}',f'Trip on day {i}.','Noted.'); service.tick()
+    report=service.expansion()['rejections']
+    found={r['reason']:r for r in report['reasons']}
+    assert (report['checks'],report['claims'],report['rejected'])==(2,8,6)
+    # An unknown reason is "other"; a claim the check skipped is "omitted".
+    assert {k:r['count'] for k,r in found.items()}=={'date':2,'other':2,'omitted':2}
+    assert not found['date']['flagged'] and [e['user_text'] for e in found['date']['examples']]==['Trip on day 1.','Trip on day 0.']
+    turn=store.record_turn('t2','Trip on day 2.','Noted.'); service.tick()
+    assert {r['reason']:r['flagged'] for r in service.expansion()['rejections']['reasons']}['date']
+    # A forgotten turn still counts but is never shown.
+    store.forget([m['id'] for m in store.visible_memories()][:1])
+    date={r['reason']:r for r in service.expansion()['rejections']['reasons']}['date']
+    assert date['count']==3 and 'Trip on day 0.' not in [e['user_text'] for e in date['examples']]
+
 def test_shared_source_forget_closure_and_stale_commit(tmp_path):
     store,graph,service=setup(tmp_path)
     a=store.record_turn('one','a','a reply'); b=store.record_turn('two','b','b reply')

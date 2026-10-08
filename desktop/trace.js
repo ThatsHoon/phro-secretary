@@ -104,6 +104,8 @@ load();
 const JUDGED = {contradicts: '대체', coexists: '누적', first: '첫 등장', negation: '부정 짝', unjudged: '판정 안 됨',
   'pair-duplicate': '다른 관계와 중복', 'pair-contradicts': '다른 관계와 모순', 'pair-coexists': '다른 관계와 공존',
   'engine-extracted': '이전 자동 추출이 이름 붙임'};
+const REASON = {subject: '주어·소유 오류', negation: '부정 누락', hypothetical: '가정·질문', ambiguous: '모호한 대상',
+  unsupported: '말하지 않은 내용', relation: '관계가 문장과 다름', date: '날짜', other: '기타', omitted: '판정 누락'};
 const KIND = {single: '대체 (새 값이 이전 값을 바꿈)', multi: '누적 (값이 쌓임)'};
 
 async function post(path, body) {
@@ -143,6 +145,15 @@ async function loadVocabulary() {
     $('empty').replaceChildren(data.empty_extractions.length
       ? el('ul', {class: 'memories'}, ...data.empty_extractions.map(e => el('li', {}, e.user_text, el('span', {class: 'meta'}, ` ${e.created_at}`))))
       : el('p', {class: 'meta'}, '없음'));
+    const rj = data.rejections;
+    $('rejections').replaceChildren(el('p', {class: 'meta'}, `최근 검증 ${rj.checks}회, 제안 ${rj.claims}개 중 거절 ${rj.rejected}개`),
+      ...(rj.reasons.length ? [el('div', {class: 'scroll'}, el('table', {},
+        el('thead', {}, el('tr', {}, ...['사유', '횟수', '상태', '예시 입력'].map(h => el('th', {scope: 'col'}, h)))),
+        el('tbody', {}, ...rj.reasons.map(r => el('tr', {},
+          el('td', {}, REASON[r.reason] || r.reason),
+          el('td', {class: 'n'}, `${r.count}회`),
+          el('td', {class: r.flagged ? 'suggest' : 'meta'}, r.flagged ? '검토 필요' : `관찰 중 (${rj.rule.flag}회부터 검토)`),
+          el('td', {}, ...r.examples.map(e => el('div', {}, e.user_text))))))))] : []));
     $('builtin').textContent = `대체: ${data.builtin.single.join(', ')} / 누적: ${data.builtin.multi.join(', ')}`;
     $('vocab-status').textContent = `후보 ${data.candidates.length}개`;
   } catch (error) {
