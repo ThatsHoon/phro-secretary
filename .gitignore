@@ -21,7 +21,3 @@ desktop/pets/*/
 
 # Installer build output (embeddable Python, electron-builder)
 desktop/build/
-
-# Local-only leftovers outside the repo (legacy UI, old test records); delete locally when no longer needed.
-legacy/
-.reference/
