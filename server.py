@@ -255,6 +255,7 @@ def respond(body):
     system = RESPOND.format(today=time.strftime('%Y-%m-%d (%a) %H:%M'))
     if not isinstance(body.get('turn_id'),str) or not body['turn_id']:
         raise ValueError('turn_id required')
+    MEMORY.store.log_input(body['turn_id'], text)
     retrieved = timed_retrieve(text, 'retrieve_respond', body['turn_id'])
     if retrieved.get('cancelled') or retrieved['memory_epoch']!=snapshot:
         return {'cancelled':True,'reason':'memory changed'}

@@ -36,6 +36,23 @@ def test_forget_restore_purge_and_stale_confirmation(tmp_path):
         store.restore(batch['batch'])
 
 
+def test_input_log_survives_reset_and_follows_purge(tmp_path):
+    store = Store(tmp_path / 'memory.db')
+    def logged():
+        with store.connect() as conn:
+            return [r[0] for r in conn.execute('SELECT text FROM input_log ORDER BY id')]
+    store.log_input('turn-1', '  나 서울 살아 \n')
+    store.log_input('cancelled', '취소한 입력')  # never committed, still logged
+    turn = store.record_turn('turn-1', '  나 서울 살아 \n', '네.')
+    ids = store.confirm([{'statement': '사용자는 서울에 산다.', 'source_ids': [turn['user_message']]}], store.epoch())
+    batch = store.forget(ids)['batch']
+    assert logged() == ['  나 서울 살아 \n', '취소한 입력']  # verbatim; archive keeps it (restorable)
+    store.purge(batch)
+    assert logged() == ['취소한 입력']  # permanent deletion reaches the log
+    store.reset()
+    assert logged() == ['취소한 입력']
+
+
 def test_projection_publish_rejects_changed_sources(tmp_path):
     store = Store(tmp_path / 'memory.db')
     turn = store.record_turn('one', 'Acme', 'ok')

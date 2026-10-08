@@ -91,6 +91,8 @@ CREATE TABLE IF NOT EXISTS vocabulary(
 CREATE TABLE IF NOT EXISTS relation_observations(
  relation TEXT NOT NULL, memory_id INTEGER NOT NULL, judgement TEXT NOT NULL, observed_at TEXT NOT NULL,
  PRIMARY KEY(relation,memory_id));
+CREATE TABLE IF NOT EXISTS input_log(
+ id INTEGER PRIMARY KEY AUTOINCREMENT, turn_key TEXT NOT NULL, text TEXT NOT NULL, created_at TEXT NOT NULL);
 """
 
 
@@ -441,10 +443,17 @@ class Store:
             conn.execute('DELETE FROM memories WHERE hidden_batch=?', (batch,))
             conn.execute('DELETE FROM relation_observations WHERE memory_id NOT IN (SELECT id FROM memories)')
             conn.execute("UPDATE turns SET digest='' WHERE turn_key IN (SELECT turn_key FROM messages WHERE hidden_batch=?)", (batch,))
+            conn.execute("DELETE FROM input_log WHERE turn_key IN (SELECT turn_key FROM messages WHERE hidden_batch=? AND role='user')", (batch,))
             conn.execute("UPDATE messages SET text='' WHERE hidden_batch=?", (batch,))
             conn.execute("UPDATE forget_batches SET status='purged',reason='' WHERE id=?", (batch,))
             self._invalidate(conn)
             return {'batch':batch,'purged':True,'graph_cleanup_pending':True}
+
+    def log_input(self, turn_key, text):
+        """Every user input verbatim, as the server received it (also inputs that were cancelled or never
+        committed), kept for replaying future updates. Survives /reset; a purge deletes its turns' inputs."""
+        with self.connect() as conn:
+            conn.execute('INSERT INTO input_log(turn_key,text,created_at) VALUES(?,?,?)', (turn_key,text,utcnow()))
 
     def vocabulary(self):
         """Relations the user promoted from the expansion candidates (memory/graph.py adds them to its rules)."""
@@ -561,6 +570,7 @@ class Store:
         with self.connect() as conn:
             conn.execute('BEGIN IMMEDIATE')
             # Promoted vocabulary is the user's decision about relations, not memory content: it survives a reset.
+            # So does input_log, the verbatim input record kept for future updates (log_input).
             for table in ('turn_dependencies','sources','memories','messages','turns','forget_batches','summaries','llm_calls',
                           'relation_observations'):
                 conn.execute('DELETE FROM '+table)

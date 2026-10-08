@@ -100,6 +100,9 @@ desktop/main.cjs (Electron)
 - 추출·반영은 5회 실패하면 dead(지수 백오프). 원인을 고친 뒤 `POST /memory_retry {}`.
 - 로컬 Host/Origin 검증, Electron sandbox/contextIsolation, 허용 자산 경로 제한을 유지한다.
 - `llm_calls`에는 시간·토큰·비용·오류·턴·결과(id·개수·다음 단계)만 기록한다. **프롬프트·응답 원문은 저장하지 않는다.**
+- 사용자 입력 원문은 `input_log`(turn_key, text, created_at)에 받은 그대로 남긴다(`/respond`가 받을 때, 취소·미확정 입력 포함).
+  이후 추출·인출 규칙을 바꿨을 때 실제 입력으로 다시 돌려 보기 위한 기록이다. `/reset`에도 유지되고, 보관은 그대로 두며,
+  **영구삭제는 그 턴의 입력도 지운다.**
 
 ## 처리 기록
 
