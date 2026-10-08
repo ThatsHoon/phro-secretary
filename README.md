@@ -14,7 +14,7 @@ Claude CLI 말고는 따로 설치할 것이 없다.
 
 2. **Claude 로그인** — 새 터미널에서 `claude`를 한 번 실행하고 로그인한다(Claude 구독 또는 Console 계정).
 3. **앱 설치** — [phro-secretary Setup 0.1.0.exe](GOOGLE_DRIVE_LINK) 받아 실행.
-   - SHA-256 `cb8a05ff71da0161005d227b8f5dee0378d61f1b9d1d9f3de1618ca18191ecbf` —
+   - SHA-256 `5e1ecde2e93843030e0f5e5c6a9035d91923309e29619ef6159749f596f85517` —
      `Get-FileHash "phro-secretary Setup 0.1.0.exe"`로 대조.
    - 서명 없는 설치 파일이라 SmartScreen이 뜨면 **추가 정보 → 실행**.
 4. 처음 실행하면 기본 캐릭터 시트를 출처에서 받고, 빠진 구성 요소가 있으면 15초 뒤 알려 준다.
