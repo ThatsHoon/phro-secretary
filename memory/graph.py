@@ -8,6 +8,7 @@ question names. The projection is derived data: deleting the file only costs a r
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from functools import cmp_to_key
 import hashlib
 import json
 import os
@@ -47,7 +48,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS entity_name ON entities(graph, name);
 CREATE TABLE IF NOT EXISTS edges(id INTEGER PRIMARY KEY, uuid TEXT NOT NULL UNIQUE, graph TEXT NOT NULL,
     source TEXT NOT NULL, target TEXT NOT NULL, name TEXT NOT NULL, fact TEXT NOT NULL, embedding BLOB,
     episodes TEXT NOT NULL, created_at TEXT NOT NULL, valid_at TEXT, invalid_at TEXT, expired_at TEXT,
-    invalidated_by TEXT);
+    invalidated_by TEXT, told TEXT NOT NULL, stated INTEGER NOT NULL);
 CREATE INDEX IF NOT EXISTS edge_source ON edges(graph, source);
 CREATE INDEX IF NOT EXISTS edge_target ON edges(graph, target);
 CREATE TABLE IF NOT EXISTS episodes(uuid TEXT PRIMARY KEY, graph TEXT NOT NULL, edges TEXT NOT NULL,
@@ -66,7 +67,7 @@ CREATE TRIGGER IF NOT EXISTS edge_text_update AFTER UPDATE OF name, fact ON edge
 '''
 # The file is derived data: a file from another schema version is emptied and rebuilt (GraphConfig.ingestion
 # changes with it, so every projection is re-ingested from the memory DB).
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 JUDGE = '''You compare a NEW FACT with facts already stored about the same people, places and things.
 Indices run continuously: EXISTING FACTS (same two entities) first, then OTHER VALUES (same relation, another object).
 - duplicate_facts: indices from EXISTING FACTS only, whose information is identical to the NEW FACT. Facts that differ
@@ -82,6 +83,16 @@ def related(a, b):
     """Edges that can contradict each other: same subject and relation (moving), or same two endpoints (negation)."""
     return ((a['source'] == b['source'] and a['name'] == b['name'])
             or {a['source'], a['target']} == {b['source'], b['target']})
+
+
+def later(a, b):
+    """Is edge a's fact newer than edge b's? Stated dates decide only when both are stated: a fact told without a date
+    has an unknown start, and its default (the time it was said) is not comparable with a date the user gave.
+    "서울에 산다" told today, then "지난주에 부산으로 이사했어": 부산 is newer although its date is earlier.
+    Otherwise the later telling wins, which also lets a restored older memory arrive already superseded."""
+    if a['stated'] and b['stated'] and a['valid_at'] and b['valid_at'] and when(a['valid_at']) != when(b['valid_at']):
+        return when(a['valid_at']) > when(b['valid_at'])
+    return a['told'] > b['told']
 
 
 def utc_now():
@@ -134,7 +145,7 @@ class GraphConfig:
     embedding: str = MODEL
     dimension: int = DIMENSION
     # Bumping this changes digest(), which rebuilds existing projections with the new ingestion path.
-    ingestion: str = 'sqlite-v2'
+    ingestion: str = 'sqlite-v3'
 
     def digest(self):
         return hashlib.sha256(json.dumps(self.__dict__,sort_keys=True).encode()).hexdigest()
@@ -247,13 +258,13 @@ class Graph:
 
     def _save_edge(self, conn, edge):
         conn.execute('''INSERT INTO edges(uuid,graph,source,target,name,fact,embedding,episodes,created_at,valid_at,
-                            invalid_at,expired_at,invalidated_by) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
+                            invalid_at,expired_at,invalidated_by,told,stated) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                         ON CONFLICT(uuid) DO UPDATE SET fact=excluded.fact,embedding=excluded.embedding,
                             episodes=excluded.episodes,invalid_at=excluded.invalid_at,expired_at=excluded.expired_at,
                             invalidated_by=excluded.invalidated_by''',
                      (edge['uuid'],edge['graph'],edge['source'],edge['target'],edge['name'],edge['fact'],
                       edge['embedding'],json.dumps(edge['episodes']),edge['created_at'],edge['valid_at'],
-                      edge['invalid_at'],edge['expired_at'],edge['invalidated_by']))
+                      edge['invalid_at'],edge['expired_at'],edge['invalidated_by'],edge['told'],edge['stated']))
 
     def ingest(self, group, memories, create=False):
         """Add memories to a projection; returns {episode uuid: [memory id]}.
@@ -320,13 +331,15 @@ class Graph:
         Only a relation outside the vocabulary goes to Claude (_judge): is it a repeat or a contradiction of
         another relation between the same entities, or of the same relation to another object ("DRIVES 소나타"
         after "DRIVES 아반떼" is a new car; nothing in the vocabulary says so).
-        The later valid_at wins; the losing edge records invalidated_by (the winner's episode) for _remove.
+        The later fact wins (later()); the losing edge records invalidated_by (the winner's episode) for _remove.
         """
         source = self._entity(conn,group,relation['subject'],relation['subject_type'])
         target = self._entity(conn,group,relation['object'],relation['object_type'])
         edge = {'uuid':str(uuid.uuid4()),'graph':group,'source':source,'target':target,'name':relation['relation'],
                 'fact':memory['statement'],'embedding':None,'episodes':[episode],'created_at':utc_now().isoformat(),
-                'valid_at':stamp.isoformat() if stamp else None,'invalid_at':None,'expired_at':None,'invalidated_by':None}
+                'valid_at':stamp.isoformat() if stamp else None,'invalid_at':None,'expired_at':None,'invalidated_by':None,
+                # When the user said it (confirmation order), and whether valid_at is a date they stated.
+                'told':f"{memory['created_at']}#{memory['id']:012d}",'stated':int(bool(memory.get('valid_from_stated')))}
         memory_id = memory['id']
         base = lambda name: name[4:] if name.startswith('NOT_') else name
         valid = [o for o in self._edges(conn,'graph=? AND source=?',(group,source)) if o['invalid_at'] is None]
@@ -368,9 +381,9 @@ class Graph:
         if judgement:
             self.observed.append((edge['name'], memory_id, judgement))
         # Restored or backfilled memories can be older than a fact already in the graph: then they arrive expired.
-        newer = [o for o in rivals if o['valid_at'] and stamp and when(o['valid_at']) > stamp]
+        newer = [o for o in rivals if later(o,edge)]
         if newer:
-            winner = min(newer, key=lambda o: when(o['valid_at']))
+            winner = min(newer, key=cmp_to_key(lambda a, b: -1 if later(b,a) else 1 if later(a,b) else 0))
             edge.update(invalid_at=winner['valid_at'], expired_at=utc_now().isoformat(),
                         invalidated_by=winner['episodes'][0])
         edge['embedding'] = self._embed(edge['fact'],usage).tobytes()

@@ -16,10 +16,12 @@ from . import trace
 # same subject, relation and object. A real run mixed "민준"/"사용자" and MOVED_TO/DOES_NOT_LIVE_IN against
 # LIVES_IN, so a correction never invalidated the old address (docs/troubleshooting.md).
 def when_said(item):
-    """Time metadata of a prompt line: since when the fact holds, and for a dated plan or state its end."""
+    """Time metadata of a prompt line: since when the fact holds (a date the user gave) or when it was told, and for a
+    dated plan or state its end."""
     if item['past']:
         return f"지난 일, ~{item['until']}"
-    return f"{item['since']}부터" + (f", ~{item['until']}" if item['until'] else '')
+    start = f"{item['since']}부터" if item['stated'] else f"기록 {item['since']}"
+    return start + (f", ~{item['until']}" if item['until'] else '')
 
 
 def iso_date(value):
@@ -466,7 +468,8 @@ class MemoryService:
                     # Validity belongs to the graph: replaying a whole source statement could
                     # resurrect an invalidated clause or an obsolete pinned fact.
                     selected.append({'id':mid,'text':edge['fact'],'score':score,'via':'graph','past':past,
-                                     'since':memory['valid_from'][:10],'until':(memory['expires_at'] or '')[:10],
+                                     'since':memory['valid_from'][:10],'stated':bool(memory['valid_from_stated']),
+                                     'until':(memory['expires_at'] or '')[:10],
                                      'source_memory_ids':ids,'edge_uuid':edge['uuid']})
             except Exception as exc:
                 degraded, error = True,type(exc).__name__

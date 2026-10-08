@@ -38,7 +38,8 @@ desktop/main.cjs (Electron)
    프롬프트 = `[기억]` + `[대화]`(요약 + 최근 10개 메시지) + `[사용자]`. 답변의 `[m:ID]`는 인용, `[e:감정]`은 동작으로 뗀다.
    지침은 `server.RESPOND`: 오늘 날짜·시각, 블록의 의미, 기억 사용 원칙(관련된 것만, 없는 사실은 모른다, 늦은 시점과 지금
    대화가 우선, 날짜는 오늘 기준, 남의 사실은 그 사람에게, 민감한 기억은 관련 있을 때만, 쓴 기억만 인용).
-   기억 줄은 `[m:ID] (YYYY-MM-DD부터[, ~끝]) 문장`, 끝난 일정·상태는 `(지난 일, ~YYYY-MM-DD)`.
+   기억 줄은 `[m:ID] (YYYY-MM-DD부터 | 기록 YYYY-MM-DD[, ~끝]) 문장`(말한 성립일 | 말한 날), 끝난 일정·상태는
+   `(지난 일, ~YYYY-MM-DD)`.
 3. 서버가 응답 해시·epoch·출처를 `response_drafts`에 둔다(10분, 최대 256개).
 4. `/commit`이 초안과 대조해 대화·작업·`turn_dependencies`를 한 트랜잭션으로 기록한다. 취소됐거나 epoch가 바뀐 응답은 거부.
 5. 워커가 **사용자 메시지에서만** 기억을 추출(Claude)하고, 별도 검증 호출(Claude)이 accept한 주장만 확정한다.
@@ -54,7 +55,8 @@ desktop/main.cjs (Electron)
 
 - 엔티티는 정확한 이름으로 식별한다(유사도 병합 없음). 사용자는 항상 "사용자", 이름은 `사용자 HAS_NAME 민준`.
 - 같은 주어·관계·대상은 한 엣지(출처 추가). `X`와 `NOT_X`는 모순.
-- `SINGLE`(새 값이 이전 값 대체): LIVES_IN, HAS_NAME, WORKS_AT, STUDIES_AT, HAS_JOB. 늦은 valid_at이 이긴다.
+- `SINGLE`(새 값이 이전 값 대체): LIVES_IN, HAS_NAME, WORKS_AT, STUDIES_AT, HAS_JOB. 나중 사실이 이긴다(`graph.later`):
+  둘 다 사용자가 말한 성립일이 있으면 늦은 날짜, 아니면 나중에 말한 쪽(`memories.valid_from_stated`로 구분).
 - `MULTI`(누적): LIKES, DRINKS, EATS, OWNS, PLAYS, STUDIES, FRIEND_OF, COLLEAGUE_OF, FAMILY_OF, PLANS_TO_VISIT.
 - 사전 밖 관계(예: DRIVES)만 Claude(haiku)가 중복·모순을 판정한다(`Graph._judge`, 프롬프트 `graph.JUDGE`).
 - 사전 확장: 사전 밖 관계의 판정을 `relation_observations`에 쌓고, 처리 기록 화면 "확장 후보" 탭이 근거 5회 이상·90% 이상

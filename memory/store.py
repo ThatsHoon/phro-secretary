@@ -52,7 +52,8 @@ CREATE TABLE IF NOT EXISTS memories(
  kind TEXT NOT NULL, importance INTEGER NOT NULL CHECK(importance BETWEEN 1 AND 10),
  certainty TEXT NOT NULL CHECK(certainty IN ('high','medium','low')),
  source_type TEXT NOT NULL, pinned INTEGER NOT NULL DEFAULT 0,
- valid_from TEXT NOT NULL, expires_at TEXT, invalid_at TEXT, hidden_batch INTEGER,
+ valid_from TEXT NOT NULL, valid_from_stated INTEGER NOT NULL DEFAULT 0, expires_at TEXT, invalid_at TEXT,
+ hidden_batch INTEGER,
  created_at TEXT NOT NULL, recall_count INTEGER NOT NULL DEFAULT 0, last_recalled REAL,
  relations TEXT,
  CHECK(NOT(pinned=1 AND source_type='external')));
@@ -105,6 +106,9 @@ class Store:
             # Databases created before these columns. NULL relations = never analysed (older/migrated memory).
             if 'relations' not in {r[1] for r in conn.execute('PRAGMA table_info(memories)')}:
                 conn.execute('ALTER TABLE memories ADD COLUMN relations TEXT')
+            # valid_from_stated=1: the user gave the date; 0: it defaults to when it was said (memory/graph.py later).
+            if 'valid_from_stated' not in {r[1] for r in conn.execute('PRAGMA table_info(memories)')}:
+                conn.execute('ALTER TABLE memories ADD COLUMN valid_from_stated INTEGER NOT NULL DEFAULT 0')
             # untracked=1: imported turn whose replies never recorded which memories they used.
             if 'untracked' not in {r[1] for r in conn.execute('PRAGMA table_info(turns)')}:
                 conn.execute('ALTER TABLE turns ADD COLUMN untracked INTEGER NOT NULL DEFAULT 0')
@@ -246,9 +250,10 @@ class Store:
                 ids.append(found)
                 continue
             mid = conn.execute('INSERT INTO memories(statement,holder,kind,importance,certainty,source_type,pinned,'
-                               'valid_from,expires_at,created_at,relations) VALUES(?,?,?,?,?,?,?,?,?,?,?)',
+                               'valid_from,valid_from_stated,expires_at,created_at,relations) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)',
                                (statement.strip(),holder,kind,claim.get('importance',5),claim.get('certainty','high'),
-                                source_type,int(bool(claim.get('pinned',False))),valid_from,expires_at,utcnow(),
+                                source_type,int(bool(claim.get('pinned',False))),valid_from,int(bool(claim.get('valid_from'))),
+                                expires_at,utcnow(),
                                 None if relations is None else json.dumps(relations,ensure_ascii=False))).lastrowid
             conn.executemany('INSERT INTO sources VALUES(?,?)', [(mid,s) for s in source_ids])
             conn.execute('UPDATE runtime SET revision=revision+1 WHERE id=1')

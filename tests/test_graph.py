@@ -20,8 +20,8 @@ def graph(tmp_path, monkeypatch):
     return Graph(tmp_path / 'memory.db', GraphConfig())
 
 
-def memory(mid, statement, subject, relation, obj, when='2026-01-01T00:00:00Z', kind='Place'):
-    return {'id': mid, 'statement': statement, 'valid_from': when,
+def memory(mid, statement, subject, relation, obj, when='2026-01-01T00:00:00Z', kind='Place', stated=False):
+    return {'id': mid, 'statement': statement, 'valid_from': when, 'created_at': when, 'valid_from_stated': stated,
             'relations': [{'subject': subject, 'subject_type': 'Person', 'relation': relation,
                            'object': obj, 'object_type': kind}]}
 
@@ -66,7 +66,7 @@ def test_relations_outside_the_vocabulary_go_to_the_judge(graph):
 
 def test_memories_without_triples_get_an_empty_episode(graph):
     group = graph.new_group()
-    mapping = graph.ingest(group, [{'id': 1, 'statement': '오늘 피곤하다.', 'valid_from': '2026-01-01', 'relations': None}],
+    mapping = graph.ingest(group, [{'id': 1, 'statement': '오늘 피곤하다.', 'valid_from': '2026-01-01', 'created_at': '2026-01-01', 'relations': None}],
                            create=True)
     assert list(mapping.values()) == [[1]] and graph.edge_counts(group, list(mapping)) == {next(iter(mapping)): 0}
 
@@ -142,7 +142,7 @@ def test_anchored_facts_need_no_similarity_floor(graph):
 
 def test_memories_without_edges_are_found_by_their_statement(graph):
     group = graph.new_group()
-    tired = {'id': 1, 'statement': '사용자는 요즘 야근이 많아 지쳐 있다.', 'valid_from': '2026-01-01', 'relations': []}
+    tired = {'id': 1, 'statement': '사용자는 요즘 야근이 많아 지쳐 있다.', 'valid_from': '2026-01-01', 'created_at': '2026-01-01', 'relations': []}
     mapping = graph.ingest(group, [tired, memory(2, '민수는 서울에 산다.', '민수', 'LIVES_IN', '서울')], create=True)
     episode = next(ep for ep, ids in mapping.items() if ids == [1])
     [hit] = [e for e in graph.search(group, '요즘 야근이 많아') if e['episodes'] == [episode]]
@@ -150,3 +150,18 @@ def test_memories_without_edges_are_found_by_their_statement(graph):
     assert any(e['uuid'] == 'episode:' + episode for e in graph.search(group, '무관한 질문', pinned_episodes=[episode]))
     graph.remove(group, [episode], {})
     assert not any(e['uuid'].startswith('episode:') for e in graph.search(group, '요즘 야근이 많아'))
+
+
+def test_a_correction_with_an_earlier_stated_date_still_supersedes(graph):
+    # "서울에 산다" told today (start unknown), then "지난주에 부산으로 이사했어" (stated, earlier than the telling).
+    group = graph.new_group()
+    graph.ingest(group, [memory(1, '사용자는 서울에 산다.', '사용자', 'LIVES_IN', '서울', '2026-10-09T09:00:00Z')], create=True)
+    graph.ingest(group, [{**memory(2, '사용자는 2026-10-01 부산으로 이사했다.', '사용자', 'LIVES_IN', '부산', '2026-10-01',
+                                   stated=True), 'created_at': '2026-10-09T09:05:00Z'}])
+    valid = {e['fact'] for e in graph.search(group, '사용자는 서울에 산다. 부산으로 이사했다.') if e['invalid_at'] is None}
+    assert valid == {'사용자는 2026-10-01 부산으로 이사했다.'}
+    # Two stated dates: the later one is current whichever was told last ("2020년엔 대구에 살았어" told afterwards).
+    graph.ingest(group, [{**memory(3, '사용자는 2020-01-01부터 대구에 살았다.', '사용자', 'LIVES_IN', '대구', '2020-01-01',
+                                   stated=True), 'created_at': '2026-10-09T09:10:00Z'}])
+    valid = {e['fact'] for e in graph.search(group, '사용자는 대구 부산 서울에 산다.') if e['invalid_at'] is None}
+    assert valid == {'사용자는 2026-10-01 부산으로 이사했다.'}
