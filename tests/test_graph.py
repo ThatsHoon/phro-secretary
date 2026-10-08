@@ -1,4 +1,4 @@
-"""SQLite graph (memory/graph.py) without Ollama: a bag-of-words embedding stands in for the local model."""
+"""SQLite graph (memory/graph.py) without the model files: a bag-of-words embedding stands in for the local model."""
 import hashlib
 
 import numpy as np
@@ -124,3 +124,17 @@ def test_failed_ingest_drops_its_judgements(graph):
     with pytest.raises(StopIteration):
         graph.ingest(group, [second])
     assert graph.take_observations() == [('DRIVES', 1, 'first'), ('RIDES', 1, 'first')]
+
+
+def test_missing_model_files_fail_with_their_location(tmp_path):
+    from memory.embedder import Embedder
+    with pytest.raises(FileNotFoundError, match='model_fp16.onnx'):
+        Embedder(tmp_path).embed('서울')
+
+
+def test_anchored_facts_need_no_similarity_floor(graph):
+    # No shared word (particles differ), so keyword and similarity both miss; the named entity still finds it.
+    group = graph.new_group()
+    graph.ingest(group, [memory(1, '위유준은 농구를 한다.', '위유준', 'PLAYS', '농구', kind='Thing'),
+                         memory(2, '민수는 서울에 산다.', '민수', 'LIVES_IN', '서울')], create=True)
+    assert [e['fact'] for e in graph.search(group, '위유준의 취미는?')] == ['위유준은 농구를 한다.']

@@ -1,6 +1,7 @@
 """phro-graph: the knowledge graph projection of confirmed memories, in a SQLite file beside the memory DB.
 
-Edges are Claude-verified triples (memory/service.py RELATION_RULES); Ollama only embeds their facts. Retrieval is
+Edges are Claude-verified triples (memory/service.py RELATION_RULES); a local model (memory/embedder.py) only
+embeds their facts. Retrieval is
 hybrid: FTS5 keyword ranking and cosine similarity fused by reciprocal rank, plus anchoring on entities the
 question names. The projection is derived data: deleting the file only costs a rebuild.
 """
@@ -13,12 +14,12 @@ import os
 import re
 import sqlite3
 import time
-import urllib.request
 import uuid
 
 import numpy as np
 
 from . import trace
+from .embedder import DIMENSION, MODEL, shared
 
 
 # Words by which the user refers to themself; they anchor retrieval on the "사용자" entity.
@@ -125,22 +126,10 @@ def fuse(*rankings):
 
 @dataclass(frozen=True)
 class GraphConfig:
-    embedding: str = 'nomic-embed-text'
-    dimension: int = 768
-    ollama_port: int = 11434
+    embedding: str = MODEL
+    dimension: int = DIMENSION
     # Bumping this changes digest(), which rebuilds existing projections with the new ingestion path.
     ingestion: str = 'sqlite-v1'
-
-    @classmethod
-    def environment(cls):
-        return cls(os.getenv('PHRO_EMBED_MODEL','nomic-embed-text'),
-                   int(os.getenv('PHRO_EMBED_DIM','768')), int(os.getenv('PHRO_OLLAMA_PORT','11434')))
-
-    def __post_init__(self):
-        if not self.embedding or not 1 <= self.dimension <= 4096:
-            raise ValueError('invalid local model configuration')
-        if not 1 <= self.ollama_port <= 65535:
-            raise ValueError('invalid local service port')
 
     def digest(self):
         return hashlib.sha256(json.dumps(self.__dict__,sort_keys=True).encode()).hexdigest()
@@ -157,10 +146,11 @@ def graph_path(owner):
 
 
 class Graph:
-    def __init__(self, owner, config=None, audit=None, llm=None):
+    def __init__(self, owner, config=None, audit=None, llm=None, embedder=None):
         """llm(system, prompt, model) -> reply text: the Claude transport for judging relations outside the
         vocabulary. Without it, verified triples are still stored by the explicit rules in _resolve."""
-        self.config = config or GraphConfig.environment()
+        self.config = config or GraphConfig()
+        self.embedder = embedder or shared()
         self.prefix = prefix_for(owner)
         self.path = graph_path(owner)
         self.audit = audit
@@ -220,28 +210,15 @@ class Graph:
                 self.audit(purpose,self.config.embedding,round((time.monotonic()-started)*1000),
                            usage=usage,error=error,turn_id=turn_id)
 
-    def _ollama(self, path, body=None, timeout=180):
-        # A ProxyHandler without proxies: loopback calls must not go through a system proxy.
-        opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
-        request = urllib.request.Request(f'http://127.0.0.1:{self.config.ollama_port}{path}',
-                                         data=None if body is None else json.dumps(body).encode(),
-                                         headers={'Content-Type':'application/json'})
-        with opener.open(request,timeout=timeout) as response:
-            return json.load(response)
-
     def _embed(self, text, usage):
-        reply = self._ollama('/api/embed',{'model':self.config.embedding,'input':[text.replace('\n',' ')]})
+        vector, tokens = self.embedder.embed(text.replace('\n',' '))
         usage['requests'] += 1
-        usage['embed_tokens'] += reply.get('prompt_eval_count',0)
-        vector = np.asarray(reply['embeddings'][0],dtype=np.float32)
+        usage['embed_tokens'] += tokens
         if vector.shape != (self.config.dimension,):
             raise ValueError('embedding dimension mismatch')
         return vector
 
     def health(self):
-        names = {m['name'] for m in self._ollama('/api/tags',timeout=10).get('models',[])}
-        if self.config.embedding not in names and self.config.embedding+':latest' not in names:
-            raise RuntimeError('missing local model: '+self.config.embedding)
         self._embed('.',{'requests':0,'embed_tokens':0})
         with self._db() as conn:
             conn.execute('SELECT count(*) FROM edge_text').fetchone()
@@ -523,8 +500,12 @@ class Graph:
                  'valid_at':e['valid_at'],'invalid_at':e['invalid_at']} for e in out]
 
     def _hybrid(self, conn, group, text, vector, limit, anchors=None):
-        """Edge uuids ranked by keyword (FTS5 bm25) and cosine similarity (above MIN_SIMILARITY), 2*limit
-        candidates each, fused by reciprocal rank. anchors limits candidates to edges touching those entities."""
+        """Edge uuids ranked by keyword (FTS5 bm25) and cosine similarity, 2*limit candidates each, fused by
+        reciprocal rank. anchors limits candidates to edges touching those entities.
+
+        MIN_SIMILARITY cuts noise from the whole graph only. An anchored edge is already about an entity the question
+        names, so it is ranked without the floor: "위유준의 취미는?" scored 0.586 against "위유준은 농구를 한다." and,
+        with no shared keyword (particles), the anchored fact was dropped (95% recall at 10k memories)."""
         scope, params = 'e.graph=?', [group]
         if anchors:
             marks = ','.join('?'*len(anchors))
@@ -543,7 +524,8 @@ class Graph:
             matrix = np.frombuffer(b''.join(r[1] for r in rows),dtype=np.float32).reshape(len(rows),-1)
             norms = np.linalg.norm(matrix,axis=1)*np.linalg.norm(vector)
             scores = np.divide(matrix@vector,norms,out=np.zeros(len(rows),dtype=np.float32),where=norms>0)
-            order = [i for i in np.argsort(-scores,kind='stable')[:2*limit] if scores[i] > MIN_SIMILARITY]
+            floor = -1 if anchors else MIN_SIMILARITY
+            order = [i for i in np.argsort(-scores,kind='stable')[:2*limit] if scores[i] > floor]
             similar = [rows[i][0] for i in order]
         return fuse(keyword,similar)[:limit]
 

@@ -61,7 +61,6 @@ def facts(graph, group):
 
 
 def main():
-    api.start_ollama(11434)
     output = Path(os.getenv('PHRO_SCENARIO_REPORT', str(Path(tempfile.gettempdir()) / 'phro_scenario_full.json')))
     report = {'started': time.strftime('%Y-%m-%d %H:%M:%S'), 'real_claude': True, 'steps': [], 'checks': []}
     temporary = tempfile.TemporaryDirectory(prefix='phro-full-')

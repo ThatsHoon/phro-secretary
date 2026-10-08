@@ -12,7 +12,7 @@ import time
 import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from memory.store import Store
-from memory.graph import Graph, GraphConfig
+from memory.graph import Graph
 from memory.service import MemoryService
 from memory import trace
 
@@ -482,33 +482,6 @@ class Handler(BaseHTTPRequestHandler):
 
 
 
-NO_WINDOW = getattr(subprocess,'CREATE_NO_WINDOW',0)
-
-
-def listening(port):
-    import socket
-    try:
-        with socket.create_connection(('127.0.0.1',port),timeout=1.5):
-            return True
-    except OSError:
-        return False
-
-
-def start_ollama(port):
-    """Start `ollama serve` unless something already listens on the port. Returns the process this server owns
-    (None when Ollama was already running, e.g. its tray app, or is not installed). It is a child in the
-    kill-on-close job, so it also ends if this server dies abruptly; its model runners are its children."""
-    if listening(port):
-        return None
-    exe = shutil.which('ollama') or os.path.join(os.environ.get('LOCALAPPDATA',''),'Programs','Ollama','ollama.exe')
-    if not os.path.isfile(exe):
-        print('Ollama is not installed; graph embeddings are unavailable',file=sys.stderr,flush=True)
-        return None
-    return subprocess.Popen([exe,'serve'],env={**os.environ,'OLLAMA_HOST':f'127.0.0.1:{port}'},
-                            stdin=subprocess.DEVNULL,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,
-                            creationflags=NO_WINDOW)
-
-
 def lock_database(path):
     """One server process per DB: a second server on the same DB would race graph projections.
 
@@ -531,7 +504,7 @@ def lock_database(path):
 
 
 def kill_children_with_me():
-    """Windows: put this process in a kill-on-close job so Claude CLI and Ollama children die with it.
+    """Windows: put this process in a kill-on-close job so Claude CLI children die with it.
 
     Without it, stopping a standalone server (Task Manager, kill) orphans in-flight `claude` calls.
     Under Electron, libuv already places the backend in such a job; nesting is supported on Windows 8+.
@@ -567,8 +540,6 @@ def main(handler=Handler):
     global MEMORY
     db_lock = lock_database(db_path())
     job = kill_children_with_me()
-    # Stop on exit only what this server started: an Ollama already running belongs to someone else.
-    ollama = start_ollama(GraphConfig.environment().ollama_port)
     store = Store(db_path())
     graph = Graph(store.path,audit=log_call,llm=graph_model if CLAUDE else None)
     MEMORY = MemoryService(store,graph,memory_model if CLAUDE else None).start()
@@ -579,12 +550,6 @@ def main(handler=Handler):
     finally:
         server.server_close()
         MEMORY.close()
-        if ollama:
-            ollama.terminate()
-            try:
-                ollama.wait(10)
-            except subprocess.TimeoutExpired:
-                ollama.kill()
         print('phro-secretary stopped',flush=True)
 
 

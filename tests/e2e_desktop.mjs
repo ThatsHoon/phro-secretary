@@ -1,6 +1,6 @@
 // Desktop E2E on a synthetic DB, isolated Electron profile and a stand-in `claude` (no account, no cost).
 // Run from the repo root on Windows: node tests/e2e_desktop.mjs
-// Claude results are always the stand-in (tests/fake_claude); the graph is real only if Ollama is up,
+// Claude results are always the stand-in (tests/fake_claude); the graph is real only if the embedding model is in models/,
 // and the report says which. Exit code 1 if any check fails.
 import {spawn, execFileSync} from 'node:child_process';
 import {mkdtempSync, mkdirSync, rmSync, readFileSync, writeFileSync, existsSync} from 'node:fs';

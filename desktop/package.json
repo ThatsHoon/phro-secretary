@@ -46,6 +46,16 @@
         ]
       },
       {
+        "from": "../models",
+        "to": "phro/models",
+        "filter": [
+          "NOTICE.md",
+          "LICENSE",
+          "nomic-embed-text-v1.5/model_fp16.onnx",
+          "nomic-embed-text-v1.5/tokenizer.json"
+        ]
+      },
+      {
         "from": ".",
         "to": "phro/desktop",
         "filter": [

@@ -1,6 +1,6 @@
 """Manual bench: where a conversation turn spends tokens and time, and what the second retrieval costs.
 
-Runs the real server on a synthetic DB with the real SQLite graph + Ollama and the stand-in `claude` (no account cost),
+Runs the real server on a synthetic DB with the real SQLite graph + embedding model and the stand-in `claude` (no account cost),
 seeds N confirmed memories with relations, waits for the graph, then drives turns the way the client does
 (/retrieve -> /respond -> /commit). Reads llm_calls back and prints per-purpose and per-turn totals.
 Claude token counts from the stand-in are placeholders; real ones come from tests/scenario_full.py.

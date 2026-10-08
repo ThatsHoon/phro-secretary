@@ -1,6 +1,6 @@
 """Manual scale bench: does the memory layer stay incremental at thousands of memories?
 
-Grows one synthetic DB (real SQLite graph + Ollama, no Claude) to --target confirmed memories with verified relations,
+Grows one synthetic DB (real SQLite graph + embedding model, no Claude) to --target confirmed memories with verified relations,
 then measures at that size: build throughput of the added batch, retrieval latency and recall, forget / restore /
 add as incremental graph updates, and the SQLite-side reads the UI polls. Re-run with a larger --target on the
 same --db to grow it; each run appends one JSON line to --out.
@@ -103,11 +103,9 @@ def main():
     parser.add_argument('--out', default=str(ROOT / 'tests' / 'scale_bench.jsonl'))
     parser.add_argument('--cleanup', action='store_true')
     args = parser.parse_args()
-    import server
     from memory.graph import Graph
     from memory.service import MemoryService
     from memory.store import Store
-    server.start_ollama(11434)
     store = Store(args.db)
     usage = []
     graph = Graph(store.path, audit=lambda purpose, model, ms, **k: usage.append(k.get('usage') or {}))

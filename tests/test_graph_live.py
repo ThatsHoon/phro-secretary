@@ -1,4 +1,4 @@
-"""Opt-in local graph integration (real Ollama embeddings); never opens a production memory DB."""
+"""Opt-in local graph integration (the real embedding model in models/); never opens a production memory DB."""
 import os
 from contextlib import closing
 import json
@@ -10,7 +10,7 @@ from memory.store import Store
 from memory.graph import Graph
 from memory.service import MemoryService
 
-@pytest.mark.skipif(os.getenv('PHRO_LIVE_TEST')!='1',reason='set PHRO_LIVE_TEST=1 for local Ollama test')
+@pytest.mark.skipif(os.getenv('PHRO_LIVE_TEST')!='1',reason='set PHRO_LIVE_TEST=1 for the local embedding model test')
 def test_real_graph_roundtrip(tmp_path,monkeypatch):
     store=Store(tmp_path/'live.db'); graph=Graph(store.path)
     def admission(purpose,model,system,prompt):

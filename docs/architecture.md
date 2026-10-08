@@ -1,16 +1,18 @@
 # phro-secretary 구조와 운영
 
 대화·기억 기반 캐릭터 비서. 화면은 캐릭터시트 오버레이(`desktop/`), 기억 정책과 지식그래프는 `memory/`가 맡는다.
-원본과 그래프 모두 SQLite 파일이고, 임베딩만 로컬 Ollama다. LLM 호출은 모두 Claude CLI다.
+원본과 그래프 모두 SQLite 파일이고, 임베딩은 같은 프로세스의 로컬 모델(`memory/embedder.py`)이다. LLM 호출은 모두 Claude CLI다.
 
 ## 폴더
 
 | 경로 | 책임 |
 |---|---|
-| `server.py` | 로컬 HTTP API(127.0.0.1). Claude CLI 호출·취소·사용량 기록(`llm_calls`), 요청 검증, 응답 초안과 커밋, Ollama 수명주기 |
+| `server.py` | 로컬 HTTP API(127.0.0.1). Claude CLI 호출·취소·사용량 기록(`llm_calls`), 요청 검증, 응답 초안과 커밋 |
 | `memory/store.py` | SQLite 원본: 대화, 확정 기억, 출처, 작업 상태, 보관·복구·완전삭제, 관계 사전 |
 | `memory/service.py` | 기억 추출→독립 검증→확정, 롤링 요약, 워커 재시도, 그래프 반영, 인출 예산 |
 | `memory/graph.py` | 지식그래프(SQLite `memory.graph.db`): 관계 반영 규칙(`SINGLE`/`MULTI`/`NOT_X`), 하이브리드 검색, 그래프 수명주기 |
+| `memory/embedder.py` | 임베딩: nomic-embed-text v1.5 fp16 ONNX를 onnxruntime으로 실행(평균 풀링, 최대 2048토큰). `python -m memory.embedder`가 해시 고정 다운로드 |
+| `models/` | 모델 가중치(Git 제외, 설치 파일에 포함)와 출처·라이선스(`NOTICE.md`, Apache-2.0 `LICENSE`) |
 | `memory/trace.py` | 백그라운드 호출을 입력(턴)에 묶는 컨텍스트 변수 |
 | `desktop/` | Electron 앱: 오버레이·대화 창·기억 관리·처리 기록 화면, 공용 대화 클라이언트 `pipeline.js`, 설치 파일 빌드 |
 | `forget_cli.py` | 실행 중 서버의 기억 검색·보관·복구·완전삭제 |
@@ -25,7 +27,7 @@ desktop/main.cjs (Electron)
        └─ MemoryService
             ├─ Store → SQLite (원본)
             └─ Graph → SQLite memory.graph.db (파생, 재구축 가능)
-                 ├─ Ollama: 임베딩만 (nomic-embed-text, 768차원)
+                 ├─ memory/embedder.py: 임베딩만 (nomic-embed-text v1.5, 768차원, 프로세스 내)
                  └─ Claude CLI: 규칙 밖 관계 충돌 판정
 ```
 
@@ -87,8 +89,8 @@ desktop/main.cjs (Electron)
 
 ## 실행
 
-Python 3.12, Node.js 22.12+, Claude Code CLI(로그인), Ollama + `nomic-embed-text`. WSL·별도 DB 서버는 필요 없다.
-Python·Node 외 구성 요소는 루트 `setup.ps1`이 설치한다(다시 실행해도 안전).
+Python 3.12, Node.js 22.12+, Claude Code CLI(로그인; 루트 `setup.ps1`이 설치). 그 밖의 서비스는 없다.
+임베딩 모델은 `.venv/Scripts/python.exe -m memory.embedder`로 `models/`에 받는다(해시 고정, 이미 있으면 건너뜀).
 
 ```powershell
 py -3.12 -m venv .venv
@@ -96,18 +98,17 @@ py -3.12 -m venv .venv
 .venv/Scripts/python.exe server.py          # API만, 127.0.0.1:8770
 ```
 
-데스크톱 앱은 [desktop.md](desktop.md). 백엔드는 꺼져 있던 Ollama를 켜고, 종료 시 자기가 켠 경우만 내린다.
+데스크톱 앱은 [desktop.md](desktop.md). 모델은 첫 임베딩 때 한 번 읽는다(메모리 약 0.5GB).
 
 | 설정 | 기본값 |
 |---|---|
 | 원본 DB | `%LOCALAPPDATA%/phro-demo/memory.db`, `PHRO_MEMORY_DB` |
 | API / 데스크톱 포트 | 8770 / 8771(`PHRO_DESKTOP_PORT`) |
 | Claude 모델 | 응답·추출·검증·관계 소급 sonnet, 요약·관계 판정 haiku (코드 고정) |
-| 임베딩 | `PHRO_EMBED_MODEL`, `PHRO_EMBED_DIM` |
-| Ollama | 11434(`PHRO_OLLAMA_PORT`) |
+| 임베딩 모델 폴더 | `PHRO_MODEL_DIR`, 기본 `models/nomic-embed-text-v1.5` |
 | Python(데스크톱) | `PHRO_PYTHON`, 기본 루트 `.venv` |
 
-진단 순서: `/health`(HTTP·작업 상태) → Ollama 모델(`ollama list`) → `/retrieve`의 degraded/error.
+진단 순서: `/health`(HTTP·작업 상태, `memory.error`) → 모델 파일(`python -m memory.embedder`가 해시 확인) → `/retrieve`의 degraded/error.
 `ready=true`는 반영 상태이지 실시간 연결 보증이 아니다.
 
 ## 기억 제어 CLI
@@ -139,22 +140,22 @@ py -3.12 -m venv .venv
 ```powershell
 .venv/Scripts/python.exe run_checks.py            # 오프라인: pytest + desktop Node 테스트
 .venv/Scripts/python.exe run_checks.py --e2e      # + Electron E2E(가짜 claude, 합성 DB, 격리 프로필)
-$env:PHRO_LIVE_TEST='1'; .venv/Scripts/python.exe -m pytest -q tests/test_graph_live.py              # 실제 Ollama 임베딩
+$env:PHRO_LIVE_TEST='1'; .venv/Scripts/python.exe -m pytest -q tests/test_graph_live.py              # 실제 임베딩 모델
 $env:PHRO_CLAUDE_TEST='1'                                                                             # + 실제 Claude 판정(유료)
 .venv/Scripts/python.exe tests/scenario_full.py   # 실제 Claude 전체 시나리오(유료, 약 $0.26)
 ```
 
-live 테스트는 Ollama가 떠 있어야 한다(데스크톱 앱 실행 중이거나 `server.start_ollama(11434)`). 테스트는 임시 DB와 그 옆
-그래프 파일만 건드린다. 사용자 DB(`%LOCALAPPDATA%\phro-demo\memory.db`)로 테스트하지 않는다.
+live 테스트는 `models/`에 모델이 있어야 한다. 테스트는 임시 DB와 그 옆 그래프 파일만 건드린다. 사용자 DB(`%LOCALAPPDATA%\phro-demo\memory.db`)로 테스트하지 않는다.
 
-측정 기준치(합성 DB, `tests/scale_bench.py`, SQLite 그래프): 1만 개 기억에서 보관·복구·추가 1초 미만, 반영 기억당 0.074s,
-인출 p50 0.30s / p95 0.38s, 근거 포함률 100%, 그래프 파일 45MB. (이전 FalkorDB: 반영 0.11s, 인출 p50 0.4s, 포함률 100%.)
+측정 기준치(합성 DB, `tests/scale_bench.py`, SQLite 그래프 + 프로세스 내 임베딩): 1만 개 기억에서 보관·복구·추가 0.5초 미만,
+반영 기억당 0.028s, 인출 p50 0.26s / p95 0.29s, 근거 포함률 100%(질의 200개), 그래프 파일 45MB.
+(이전 FalkorDB+Ollama: 반영 0.11s, 인출 p50 0.4s, 포함률 100%.)
 실제 Claude 시나리오 21개 검사 통과, 한 번에 약 $0.26.
 
 ## 남은 작업
 
 - 음성(마이크→STT→대화→TTS): 공급자 미정으로 보류. `pipeline.js`의 `opts.commit=false`(추측 실행 후 커밋 결정)가 그 자리다.
-- 실제 절전 복귀 후 Ollama 재연결, 배율이 다른 모니터 혼합, 실제 고대비 테마는 수동 확인 필요.
+- 배율이 다른 모니터 혼합, 실제 고대비 테마는 수동 확인 필요.
 - 커뮤니티 시트 재배포 권리 미확인(설치 파일에 시트 미포함, 첫 실행에 출처에서 받음).
 - `WORKS_AT`이 단일값이라 동시에 두 직장은 나중 것만 남는다. 앵커 인출은 이름이 질문에 그대로 나와야 걸린다(별칭 불가).
 - 코드 서명 없음(결정). 배포 시 SHA-256을 따로 전달한다([desktop.md](desktop.md)).

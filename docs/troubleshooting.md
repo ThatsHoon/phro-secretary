@@ -3,23 +3,26 @@
 유지보수 중 같은 문제를 다시 겪지 않도록, 실제로 겪은 증상·원인·해결을 모은다. 새 항목은 해당 절에 추가한다.
 형식: **증상** → 원인 → 해결(위치).
 
-## 1. 그래프 저장소 · Ollama
+## 1. 그래프 저장소 · 임베딩
 
 - **설치 파일만으로는 기억 검색이 동작하지 않았다.** → 그래프 DB(FalkorDB)가 Windows 빌드가 없어 WSL Ubuntu 안에서 돌았다.
   WSL 설치·systemd 서비스·세션 유지(WSL은 Windows 쪽 프로세스가 없으면 distro를 수 초 안에 내린다)·localhost 포워딩 장애
   구분까지 앱이 떠안았다. → 그래프를 원본 DB 옆 SQLite 파일(`memory.graph.db`)로 옮겼다(`memory/graph.py`).
   FalkorDB의 벡터 검색도 인덱스 없이 전체를 비교했으므로 numpy 전체 비교와 같은 방식이고, 전문검색은 FTS5 bm25로 대체했다.
   1만 기억 기준 수치는 [architecture.md](architecture.md) "검증". WSL·Redis·FalkorDB 의존성이 모두 빠졌다.
-- **Ollama를 앱 종료 때 내렸더니 사용자가 따로 켜 둔 것까지 꺼졌다**(설계 단계에서 차단).
-  → 시작 전에 이미 응답하던 Ollama는 "남의 것"으로 보고 그대로 둔다. 백엔드가 켠 것만 종료(`server.main`).
-- **live 테스트가 임베딩 연결 실패로 멈춘다.** → 테스트 프로세스는 Ollama를 켜지 않는다.
-  → 데스크톱 앱을 켜 두거나 `server.start_ollama(11434)`를 먼저 부른다.
+- **SQLite로 옮긴 뒤에도 임베딩 때문에 Ollama를 따로 설치해야 했다.** → 같은 모델(nomic-embed-text v1.5)을 ONNX로
+  프로세스 안에서 돌린다(`memory/embedder.py`). 내보내기 비교: fp16은 fp32와 코사인 1.0, int8은 0.95~0.96이라 fp16을 쓴다.
+  Ollama와는 영어 문장이 1.0인데 한국어는 0.78~0.86이다. 풀링·정규화가 같으니 원인은 토크나이저로 본다:
+  HF 공식 토크나이저(학습 기준, uncased라 한글을 자모로 분해)와 Ollama 쪽이 다르게 자른다. 공식 토크나이저를 따른다.
+  그래프는 설정 변경으로 한 번 다시 만들어진다.
+- **`tokenizers`가 huggingface_hub과 그 네트워크 의존성(httpx, hf-xet 등)을 끌고 왔다.** → 모델 다운로드에만 쓰이고 앱은
+  파일에서 읽는다. → 설치 파일에는 `--no-deps`로 넣는다(`build-python.mjs`의 `NO_DEPS`).
 - **Windows에서 테스트가 그래프 파일을 지우지 못했다(`WinError 32`).** → `with sqlite3.connect(...)`는 트랜잭션만 끝내고
   연결을 닫지 않는다. → `contextlib.closing`으로 닫는다(`memory/graph.py`의 `_db`는 매 호출 연결을 닫는다).
 
 ## 2. 프로세스 수명주기 (Electron · 백엔드)
 
-- **앱을 꺼도 python·ollama·claude 프로세스가 남는다.** → 부모가 죽어도 손자 프로세스는 남는다.
+- **앱을 꺼도 python·claude 프로세스가 남는다.** → 부모가 죽어도 손자 프로세스는 남는다.
   → 백엔드가 Windows kill-on-close Job을 만들어 자식을 넣는다(`kill_children_with_me`). Electron의 자식은 libuv Job이 담당.
   작업 관리자 강제 종료에도 잔존 0 확인.
 - **종료 신호로 stdin EOF를 쓰자 백엔드가 멈췄다(서브프로세스 생성 교착).** → Windows에서 stdin을 읽으며 블록된 스레드가
