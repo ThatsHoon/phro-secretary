@@ -231,7 +231,7 @@ class MemoryService:
             self.store.audit_static('memory_extract_skipped',turn['turn_key'],
                                     {'reason':'question only','next':'done (no memory)'})
             return
-        frame = self.llm('memory_extract','sonnet',EXTRACT+today,body)
+        frame = self.llm('memory_extract','haiku',EXTRACT+today,body)
         claims = frame.get('claims') if isinstance(frame,dict) else None
         if not isinstance(claims,list) or len(claims)>20:
             raise ValueError('invalid extraction result')
@@ -261,7 +261,7 @@ class MemoryService:
         accepted = []
         if claims:
             evidence = body+'\nPROPOSALS:\n'+json.dumps(claims,ensure_ascii=False)
-            result = self.llm('memory_evaluate','sonnet',EVALUATE+today,evidence)
+            result = self.llm('memory_evaluate','haiku',EVALUATE+today,evidence)
             votes = result.get('verdicts') if isinstance(result,dict) else None
             if not isinstance(votes,list):
                 raise ValueError('invalid evaluation result')

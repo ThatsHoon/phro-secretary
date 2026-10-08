@@ -116,7 +116,7 @@ py -3.12 -m venv .venv
 |---|---|
 | 원본 DB | `%LOCALAPPDATA%/phro-demo/memory.db`, `PHRO_MEMORY_DB` |
 | API / 데스크톱 포트 | 8770 / 8771(`PHRO_DESKTOP_PORT`) |
-| Claude 모델 | 응답·추출·검증·관계 소급 `claude-sonnet-5-5`, 요약·관계 판정 `claude-haiku-5-5` (`server.MODELS`), `--effort medium` |
+| Claude 모델 | 응답·관계 소급 `claude-sonnet-5-5`, 기억 추출·검증·요약·관계 판정 `claude-haiku-5-5` (`server.MODELS`), `--effort medium` |
 | 임베딩 모델 폴더 | `PHRO_MODEL_DIR`, 기본 `models/nomic-embed-text-v1.5` |
 | Python(데스크톱) | `PHRO_PYTHON`, 기본 루트 `.venv` |
 

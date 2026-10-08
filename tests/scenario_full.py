@@ -7,7 +7,7 @@ Every step records what each workflow did: retrieval block, reply/emotion/citati
 proposals and verdicts, confirmed memories with relations, graph facts, summary and audit tokens.
 
     .venv/Scripts/python.exe tests/scenario_full.py    # report: %TEMP%/phro_scenario_full.json
-Costs roughly 40-50 Claude calls (respond: sonnet, extraction/evaluation: sonnet, summary: haiku).
+Costs roughly 40-50 Claude calls (respond: sonnet; extraction, evaluation, summary: haiku).
 Only a temporary DB and the graphs it owns are touched.
 """
 from pathlib import Path
