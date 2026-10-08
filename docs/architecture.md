@@ -1,0 +1,158 @@
+# phro-secretary 구조와 운영
+
+대화·기억 기반 캐릭터 비서. 화면은 캐릭터시트 오버레이(`desktop/`), 기억 정책은 `memory/`, 지식그래프는
+`memory_engine/` + FalkorDB + Ollama(임베딩)가 맡는다. LLM 호출은 모두 Claude CLI다.
+
+## 폴더
+
+| 경로 | 책임 |
+|---|---|
+| `server.py` | 로컬 HTTP API(127.0.0.1). Claude CLI 호출·취소·사용량 기록(`llm_calls`), 요청 검증, 응답 초안과 커밋, 외부 서비스(WSL·FalkorDB·Ollama) 수명주기 |
+| `memory/store.py` | SQLite 원본: 대화, 확정 기억, 출처, 작업 상태, 보관·복구·완전삭제, 관계 사전 |
+| `memory/service.py` | 기억 추출→독립 검증→확정, 롤링 요약, 워커 재시도, 그래프 반영, 인출 예산 |
+| `memory/graph.py` | memory_engine 구성, 관계 반영 규칙(`SINGLE`/`MULTI`/`NOT_X`), 검색, 그래프 수명주기 |
+| `memory/trace.py` | 백그라운드 호출을 입력(턴)에 묶는 컨텍스트 변수 |
+| `memory_engine/` | 그래프 기억 엔진. 출처 표기와 라이선스는 `memory_engine/NOTICE.md`, `LICENSE`(코드와 함께 배포해야 함) |
+| `desktop/` | Electron 앱: 오버레이·대화 창·기억 관리·처리 기록 화면, 공용 대화 클라이언트 `pipeline.js`, 설치 파일 빌드 |
+| `forget_cli.py` | 실행 중 서버의 기억 검색·보관·복구·완전삭제 |
+| `run_checks.py` | 오프라인 회귀 검사 일괄 실행 |
+| `tests/` | 단위·HTTP·실제 그래프(opt-in)·E2E 테스트, 수동 벤치(`scale_bench.py`, `token_bench.py`), 실제 Claude 시나리오(`scenario_full.py`) |
+
+```text
+desktop/main.cjs (Electron)
+  └─ desktop/serve.py (127.0.0.1:8771) = server.Handler + 화면 자산
+       ├─ overlay.js / app.js / manage.js / trace.js
+       │    └─ pipeline.js: /retrieve → /respond → /commit → /checkpoint_due
+       └─ MemoryService
+            ├─ Store → SQLite (원본)
+            └─ Graph → memory_engine → FalkorDB (파생, 재구축 가능)
+                         ├─ Ollama: 임베딩만 (nomic-embed-text, 768차원)
+                         └─ Claude CLI: 규칙 밖 관계 충돌 판정, 관계 없는 기억의 추출
+```
+
+## 턴 하나의 흐름
+
+1. 클라이언트가 `turn_id`를 만들고 `/retrieve`로 표시용 기억과 `memory_epoch`를 받는다.
+2. `/respond`는 서버에서 **다시 인출**한다. 답변 근거와 출처는 서버 인출에서만 나온다(클라이언트 블록은 표시용).
+   프롬프트 = `[기억]` + `[대화]`(요약 + 최근 10개 메시지) + `[사용자]`. 답변의 `[m:ID]`는 인용, `[e:감정]`은 동작으로 뗀다.
+3. 서버가 응답 해시·epoch·출처를 `response_drafts`에 둔다(10분, 최대 256개).
+4. `/commit`이 초안과 대조해 대화·작업·`turn_dependencies`를 한 트랜잭션으로 기록한다. 취소됐거나 epoch가 바뀐 응답은 거부.
+5. 워커가 **사용자 메시지에서만** 기억을 추출(Claude)하고, 별도 검증 호출(Claude)이 accept한 주장만 확정한다.
+   추출은 주장마다 `(주체, 관계, 대상)` 트리플을 함께 내고 `memories.relations`에 저장한다.
+   질문만 있는 턴(회상·가정·양자택일)은 추출을 부르지 않는다(`service.question_only`, 기록은 `memory_extract_skipped`).
+6. 확정 기억을 `add_triplet`으로 그래프에 넣는다. 관계가 NULL인 기억(형식 오류 등)은 엔진 자체 추출(`add_episode`, Claude).
+7. 오래된 메시지가 쌓이면 haiku가 대화 언어로 롤링 요약한다. 보관·삭제가 일어나면 요약은 통째로 다시 만든다.
+
+## 그래프 반영 규칙
+
+- 엔티티는 정확한 이름으로 식별한다(엔진의 유사도 병합을 거치지 않음). 사용자는 항상 "사용자", 이름은 `사용자 HAS_NAME 민준`.
+- 같은 주어·관계·대상은 한 엣지(출처 추가). `X`와 `NOT_X`는 모순.
+- `SINGLE`(새 값이 이전 값 대체): LIVES_IN, HAS_NAME, WORKS_AT, STUDIES_AT, HAS_JOB. 늦은 valid_at이 이긴다.
+- `MULTI`(누적): LIKES, DRINKS, EATS, OWNS, PLAYS, STUDIES, FRIEND_OF, COLLEAGUE_OF, FAMILY_OF, PLANS_TO_VISIT.
+- 사전 밖 관계(예: DRIVES)만 엔진의 `dedupe_edges.resolve_edge` 프롬프트로 Claude(haiku)가 판정한다(`Graph._judge`).
+- 사전 확장: 사전 밖 관계의 판정을 `relation_observations`에 쌓고, 처리 기록 화면 "확장 후보" 탭이 근거 5회 이상·90% 이상
+  같은 판정이면 대체/누적을 추천한다. 확정은 **사용자 버튼으로만**(`/vocabulary_promote`, 되돌리기 `/vocabulary_demote`).
+  확정한 관계는 `vocabulary` 테이블에 남고 다음 반영부터 규칙으로 판정한다. 대화 초기화에도 유지된다.
+- 기억별 상태 `linked`/`no_relation`/`missing`을 기록해 `/health`의 `coverage`로 보인다. 반영 완료 ≠ 검색 가능.
+- 증분 반영: 보관·영구삭제된 기억과 관계를 다시 분석한 기억(`graph_stale`)의 에피소드만 빼고, 새 확정·복구만 넣는다.
+  전체 재구축은 그래프 설정(`GraphConfig.ingestion`, 임베딩 모델) 변경, 쓰기 중 장애(pending 세대), `/reset`, 반영 실패 재시도에서만.
+- 빼기(`Graph.remove`)는 출처가 모두 빠진 엣지만 지우고, 공유 엣지는 남은 첫 기억의 문장으로 fact를 다시 쓴다.
+  무효화는 엣지 속성 `invalidated_by`로 기록해 원인이 빠지면 되살리거나 대체한 기억에 넘긴다.
+- 인출은 질문에 나온 엔티티 이름(나/내/저는 → "사용자")의 엣지 안에서 먼저 찾는다(`Graph._anchors`), 그다음 하이브리드 검색.
+  보관된 기억이 출처인 엣지는 워커가 그래프를 고치기 전에도 버린다. 고정 기억은 항상 포함, 예산 1200은 **UTF-8 바이트**.
+
+## 불변 조건
+
+- 같은 turn_id의 동일 커밋은 멱등. 취소·오래된 epoch 응답은 커밋하지 않는다.
+- 보관은 epoch를 바꿔 진행 중 추출·요약·응답·커밋을 무효화한다. 범위: 잊는 기억의 근거 턴은 통째로, 그 메시지를 문맥으로 본
+  이후 턴은 **답변만** 숨긴다(`turns`/`reply_turns`). 이관 표시 턴(`untracked=1`)은 가장 이른 잊는 메시지 이후 답변을 모두 숨긴다.
+  복구·완전삭제는 같은 배치에 적용한다. `/forget_preview`가 범위를 미리 보여 준다.
+- 그래프는 원본이 아니라 파생물이다. 원본 revision과 그래프 발행 revision이 다르면 발행하지 않는다. 쓰기 전에 pending 세대를 기록하고,
+  응답 유실·재시작 시 중복 append 대신 그 세대를 폐기·재구축한다. 정리가 밀리면 `/health`에 `cleanup_pending`.
+- 한 DB당 서버 하나. DB 옆 `.lock` 파일로 두 번째 서버를 거부한다(프로세스가 끝나면 OS가 해제).
+- 그래프 이름은 DB 경로 해시(`phro_ai_<hash>_`). 접두사 `phro_ai_`는 기존 그래프와 맞물린 내부 식별자라 프로젝트 개명 후에도 바꾸지 않는다. DB는 그래프를 만든 경로를 `runtime.graph_owner`에 기록하고, 다른 경로에서 열리면
+  자기 그래프를 다시 만든다(이동이면 옛 그래프 삭제, 복사본이면 원본용으로 둔다).
+- 추출·반영은 5회 실패하면 dead(지수 백오프). 원인을 고친 뒤 `POST /memory_retry {}`.
+- 로컬 Host/Origin 검증, Electron sandbox/contextIsolation, 허용 자산 경로 제한을 유지한다.
+- `llm_calls`에는 시간·토큰·비용·오류·턴·결과(id·개수·다음 단계)만 기록한다. **프롬프트·응답 원문은 저장하지 않는다.**
+
+## 처리 기록
+
+모든 `llm_calls` 행은 처리한 턴(`turns`)과 결과(`outcome`)를 남긴다. 백그라운드 작업은 `memory/trace.py`의 컨텍스트 변수로
+턴을 넘겨받고, 이 변수는 그래프 이벤트 루프와 `asyncio.to_thread`까지 따라간다. 여러 턴이 함께 쓴 호출은 각 턴에 "공유 n"으로
+표시하고 합계에는 1/n만 더한다. 출처 턴이 50개를 넘는 재구축은 특정 입력에 묶지 않는다.
+조회 `GET /trace?limit=30`, 화면은 메뉴 "처리 기록 보기". `PHRO_TOKEN_DEBUG=1`이면 각 행을 stderr에 JSON으로 찍는다.
+
+## 실행
+
+Python 3.12, Node.js 22.12+, Claude Code CLI(로그인), WSL Ubuntu-24.04의 FalkorDB(`phro-falkor` 서비스), Ollama + `nomic-embed-text`.
+Python·Node 외 구성 요소는 루트 `setup.ps1`이 설치한다(FalkorDB v4.20.7 모듈 해시 고정, 다시 실행해도 안전).
+
+```powershell
+py -3.12 -m venv .venv
+.venv/Scripts/python.exe -m pip install -r requirements.txt
+.venv/Scripts/python.exe server.py          # API만, 127.0.0.1:8770
+```
+
+데스크톱 앱은 [desktop.md](desktop.md). 백엔드는 실행 동안 WSL 세션을 소유하고, 꺼져 있던 FalkorDB·Ollama를 켜며, 종료 시 자기가 켠 것만 내린다.
+
+| 설정 | 기본값 |
+|---|---|
+| 원본 DB | `%LOCALAPPDATA%/phro-demo/memory.db`, `PHRO_MEMORY_DB` |
+| API / 데스크톱 포트 | 8770 / 8771(`PHRO_DESKTOP_PORT`) |
+| Claude 모델 | 응답·추출·검증·관계 소급 sonnet, 요약 haiku, 엔진 호출 small→haiku / medium→sonnet (코드 고정) |
+| FalkorDB 서비스 이름 | `PHRO_FALKOR_SERVICE`(기본 `phro-falkor`) |
+| 임베딩 | `PHRO_EMBED_MODEL`, `PHRO_EMBED_DIM` |
+| Ollama / FalkorDB | 11434(`PHRO_OLLAMA_PORT`) / 6379(`PHRO_FALKOR_PORT`) |
+| WSL distro | `PHRO_WSL_DISTRO`(기본 `Ubuntu-24.04`, `''`이면 WSL 관리 끔) |
+| Python(데스크톱) | `PHRO_PYTHON`, 기본 루트 `.venv` |
+
+진단 순서: `/health`(HTTP·작업 상태) → WSL 내부 `redis-cli PING` → Windows TCP 6379 → Ollama 모델 → `/retrieve`의 degraded/error.
+`ready=true`는 반영 상태이지 실시간 연결 보증이 아니다.
+
+## 기억 제어 CLI
+
+```powershell
+.venv/Scripts/python.exe forget_cli.py search "서울"
+.venv/Scripts/python.exe forget_cli.py forget 12 --reason "위치 기록"
+.venv/Scripts/python.exe forget_cli.py list
+.venv/Scripts/python.exe forget_cli.py restore 3
+.venv/Scripts/python.exe forget_cli.py purge 3 --yes
+.venv/Scripts/python.exe forget_cli.py list --server http://127.0.0.1:8771   # 데스크톱 서버 대상
+```
+
+완전삭제는 원본 기억과 출처 대화 내용을 지운다. 외부 백업의 삭제는 별도다.
+
+## 백업과 복구
+
+SQLite 한 파일만 백업한다(그래프는 저장된 트리플로 재구축, 기억 추출용 Claude 재호출 없음). 실행 중에도 일관된 사본:
+
+```powershell
+.venv/Scripts/python.exe -c "import sqlite3,sys;sqlite3.connect(sys.argv[1]).backup(sqlite3.connect(sys.argv[2]))" C:/path/memory.db C:/path/memory-backup.db
+```
+
+복구는 서버를 멈추고 파일을 되돌리거나 `PHRO_MEMORY_DB`를 지정한다. 영구삭제 뒤 이전 백업을 복구하면 지운 원문이 돌아온다.
+
+## 검증
+
+```powershell
+.venv/Scripts/python.exe run_checks.py            # 오프라인: pytest + desktop Node 테스트
+.venv/Scripts/python.exe run_checks.py --e2e      # + Electron E2E(가짜 claude, 합성 DB, 격리 프로필)
+$env:PHRO_LIVE_TEST='1'; .venv/Scripts/python.exe -m pytest -q tests/test_graph_live.py              # 실제 FalkorDB+Ollama
+$env:PHRO_CLAUDE_TEST='1'                                                                             # + 실제 Claude 판정(유료)
+.venv/Scripts/python.exe tests/scenario_full.py   # 실제 Claude 전체 시나리오(유료, 약 $0.26)
+```
+
+live 테스트는 WSL 세션이 살아 있어야 한다(데스크톱 앱 실행 중이거나 `server.hold_wsl`을 띄운 상태). 테스트는 임시 DB와 그 DB가 만든
+그래프만 건드린다. 사용자 DB(`%LOCALAPPDATA%\phro-demo\memory.db`)로 테스트하지 않는다.
+
+측정 기준치(합성 DB): 1만 개 기억에서 보관·복구·추가 1초 미만, 반영 기억당 0.11s, 인출 p50 0.4s, 근거 포함률 100%.
+실제 Claude 시나리오 21개 검사 통과, 한 번에 약 $0.26.
+
+## 남은 작업
+
+- 음성(마이크→STT→대화→TTS): 공급자 미정으로 보류. `pipeline.js`의 `opts.commit=false`(추측 실행 후 커밋 결정)가 그 자리다.
+- 실제 절전 복귀 후 WSL/FalkorDB 재연결, 배율이 다른 모니터 혼합, 실제 고대비 테마는 수동 확인 필요.
+- 커뮤니티 시트 재배포 권리 미확인(설치 파일에 시트 미포함, 첫 실행에 출처에서 받음).
+- `WORKS_AT`이 단일값이라 동시에 두 직장은 나중 것만 남는다. 앵커 인출은 이름이 질문에 그대로 나와야 걸린다(별칭 불가).
+- 코드 서명 없음(결정). 배포 시 SHA-256을 따로 전달한다([desktop.md](desktop.md)).

@@ -1,0 +1,52 @@
+:root{--s:1;--panel:rgba(32,32,34,.92);--line:rgba(255,255,255,.12);--text:#f2f2f2;--muted:#c8c8cc;--accent:#2f6fd6}
+html,body{margin:0;background:transparent;overflow:hidden;user-select:none;font:0.875rem system-ui,sans-serif;color:var(--text)}
+/* The window is resized to #root, and transparent pixels pass clicks through (overlay.js). */
+#root{display:inline-flex;flex-direction:column;align-items:center;gap:8px;padding:2px 4px 4px}
+#stage{position:relative}
+/* Dragging is done in JS: Windows' native drag can show only an outline and freezes the window until release. */
+canvas{display:block;width:calc(192px*var(--s));height:calc(208px*var(--s));image-rendering:pixelated;cursor:grab;touch-action:none;border-radius:12px}
+canvas:active{cursor:grabbing}
+canvas:focus-visible{outline:2px dashed var(--accent);outline-offset:-2px}
+[hidden]{display:none!important}
+nav,#compose,#card{background:var(--panel);border:1px solid var(--line)}
+nav{display:flex;padding:6px 10px;border-radius:999px}
+button{display:grid;place-items:center;width:30px;height:28px;padding:0;border:0;border-radius:8px;background:transparent;color:inherit;cursor:pointer}
+button:hover,button:focus-visible{background:rgba(255,255,255,.16);outline:none}
+button:focus-visible{box-shadow:0 0 0 2px var(--accent)}
+.dot{position:absolute;top:6px;right:6px;width:12px;height:12px;border-radius:50%;border:2px solid rgba(0,0,0,.45);background:#8e8e93}
+.dot[data-state=ok]{background:#34c759}.dot[data-state=warn]{background:#ffb020}.dot[data-state=down]{background:#ff453a}
+#compose{display:flex;align-items:center;gap:6px;width:320px;box-sizing:border-box;padding:6px;border-radius:999px}
+#compose input{flex:1;min-width:0;border:0;background:transparent;color:inherit;font:inherit;outline:none}
+#compose input::placeholder{color:#9a9a9e}
+.send{width:28px;border-radius:50%;background:var(--accent)}
+.send:hover,.send:focus-visible{background:#3b80ee}
+.send .icon-stop,.send.stop .icon-send{display:none}.send.stop .icon-stop{display:block}
+.send.stop{background:#5a5a60}
+#card{width:320px;box-sizing:border-box;padding:10px 12px 10px 16px;border-radius:18px}
+.card-head{display:flex;align-items:center;gap:8px}
+.card-head strong{flex:1;font-size:1em}
+#card-close{width:22px;height:22px;flex-shrink:0}
+#card.busy strong::after{content:'';display:inline-block;width:1.2em;text-align:left;animation:dots 1.2s steps(4) infinite}
+@keyframes dots{0%{content:''}25%{content:'.'}50%{content:'..'}75%{content:'...'}}
+#card-body{margin:3px 0 0;color:var(--muted);white-space:pre-wrap;overflow-wrap:anywhere;cursor:pointer;user-select:text;
+  display:-webkit-box;-webkit-line-clamp:5;-webkit-box-orient:vertical;overflow:hidden}
+#card-body:empty{display:none}
+#card.expanded #card-body{display:block;max-height:320px;overflow:auto}
+#card-note{margin:6px 0 0;font-size:.85em;color:#8fd19e}
+/* Open/close motion. Entering runs whenever an element leaves display:none; .leaving is added before hiding. */
+nav,#card{transform-origin:top center;animation:pop-in .2s cubic-bezier(.2,.9,.3,1.2)}
+#compose{transform-origin:top center;animation:grow-in .24s cubic-bezier(.2,.9,.3,1)}
+#compose>*{animation:fade-in .24s ease-out}
+nav.leaving,#card.leaving{animation:pop-out .14s ease-in forwards}
+#compose.leaving{animation:grow-out .16s ease-in forwards}
+@keyframes pop-in{from{opacity:0;transform:translateY(-8px) scale(.94)}}
+@keyframes pop-out{to{opacity:0;transform:translateY(-6px) scale(.96)}}
+@keyframes grow-in{from{opacity:0;transform:scaleX(.18)}}
+@keyframes grow-out{to{opacity:0;transform:scaleX(.18)}}
+@keyframes fade-in{0%,40%{opacity:0}}
+#card-body{transition:max-height .2s ease}
+@media (prefers-reduced-motion:reduce){#card.busy strong::after{animation:none;content:'…'}
+  nav,#card,#compose,#compose>*,nav.leaving,#card.leaving,#compose.leaving{animation:none}}
+@media (prefers-contrast:more){:root{--panel:#000;--line:#fff;--muted:#fff}}
+@media (forced-colors:active){nav,#compose,#card{background:Canvas;border-color:CanvasText;color:CanvasText}
+  #card-body,#card-note{color:CanvasText}.send{background:Highlight;color:HighlightText}.dot{forced-color-adjust:none}}

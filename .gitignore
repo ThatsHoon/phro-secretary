@@ -1,0 +1,27 @@
+# 의존성·캐시·로그
+node_modules/
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+*.log
+*.bak
+
+# 로컬 도구 설정
+.claude/
+
+# 로컬 DB·모델 가중치
+*.db
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm
+
+# Downloaded community sheets: local use; keep source catalog in Git.
+desktop/pets/*/
+
+# Installer build output (embeddable Python, electron-builder)
+desktop/build/
+
+# Local-only leftovers outside the repo (legacy UI, old test records); delete locally when no longer needed.
+legacy/
+.reference/

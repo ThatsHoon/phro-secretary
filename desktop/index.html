@@ -1,0 +1,15 @@
+<!doctype html>
+<html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>phro-secretary · Character Sheets</title><link rel="stylesheet" href="/style.css"></head>
+<body><main><header><div><small>PHRO-SECRETARY</small><h1>기억을 이어가는 동료</h1></div><span id="status" role="status">연결 확인 중</span></header>
+<section class="stage"><canvas id="pet" width="192" height="208" aria-label="캐릭터 애니메이션"></canvas>
+<div><label>캐릭터 <select id="character"></select></label><p id="credit"></p>
+<label>동작 <select id="action"><option value="auto">대화에 맞춰 자동</option></select></label>
+<label id="look-label">바라보는 방향 <input id="direction" type="range" min="0" max="337.5" step="22.5" value="0"></label>
+<p id="motion" aria-live="polite">idle</p></div></section>
+<section id="chat" aria-label="대화" aria-live="polite"></section>
+<form id="form"><label for="text">대화 입력</label><div class="compose"><input id="text" required maxlength="8000" autocomplete="off" placeholder="기억할 사실을 알려 주세요"><button id="send">보내기</button><button type="button" id="cancel" disabled>취소</button></div></form>
+<details><summary>기억·KG 연동 상태</summary><button id="refresh" type="button">상태 새로고침</button><pre id="memory"></pre><pre id="retrieval"></pre></details>
+<details id="manage"><summary>기억 관리</summary><input id="manage-query" type="search" placeholder="기억 검색" aria-label="기억 검색" autocomplete="off">
+<div id="manage-backfill"></div><ul id="manage-list" class="manage"></ul><h2>보관 기록</h2><ul id="manage-batches" class="manage"></ul><p id="manage-note" role="status"></p></details>
+</main><script type="module" src="/app.js"></script><script type="module" src="/manage.js"></script></body></html>

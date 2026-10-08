@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>phro-secretary 처리 기록</title>
+<link rel="stylesheet" href="/trace.css">
+</head>
+<body>
+<main>
+  <header>
+    <h1>처리 기록</h1>
+    <div class="controls">
+      <label>최근 <select id="limit"><option>10</option><option selected>30</option><option>100</option></select> 입력</label>
+      <button id="refresh" type="button">새로고침</button>
+    </div>
+  </header>
+  <nav class="tabs" role="tablist">
+    <button type="button" role="tab" id="tab-turns" aria-selected="true" aria-controls="view-turns">입력별 기록</button>
+    <button type="button" role="tab" id="tab-vocab" aria-selected="false" aria-controls="view-vocab">확장 후보</button>
+  </nav>
+  <div id="view-turns" role="tabpanel" aria-labelledby="tab-turns">
+  <p class="note">입력(발화)마다 거친 단계, 호출한 모델, 소모 토큰, 결과와 다음 단계를 보여 줍니다.
+    프롬프트와 응답 원문은 저장하지 않으며, 표의 발화는 대화 기록에 남아 있는 것입니다.
+    여러 입력이 함께 쓴 호출(한 번의 그래프 반영 등)은 각 입력에 "공유 n"으로 표시하고 합계에는 1/n만 더합니다.</p>
+  <p id="status" role="status"></p>
+  <section id="turns"></section>
+  <section>
+    <h2>입력에 묶이지 않은 처리</h2>
+    <p class="note">그래프 전체 재구축처럼 특정 입력이 원인이 아닌 작업입니다.</p>
+    <div id="other"></div>
+  </section>
+  </div>
+  <div id="view-vocab" role="tabpanel" aria-labelledby="tab-vocab" hidden>
+    <p class="note">관계 사전(그래프가 규칙으로 판정하는 관계)에 없는 관계가 들어올 때마다 Claude가 어떻게 판정했는지 모읍니다.
+      새 대상이 이전 대상을 <b>대체</b>(이사·이직처럼)했는지, 함께 <b>누적</b>(취향처럼)됐는지가 근거입니다.
+      확정하면 그 뒤로 들어오는 사실은 Claude 판정 없이 규칙으로 처리합니다. 이미 그래프에 있는 사실은 바꾸지 않습니다.</p>
+    <p id="vocab-status" role="status"></p>
+    <h2>후보</h2>
+    <div id="candidates"></div>
+    <h2>확정한 관계</h2>
+    <div id="learned"></div>
+    <h2>기억이 하나도 나오지 않은 추출</h2>
+    <p class="note">기억 추출을 불렀지만 저장할 기억이 없었던 입력입니다. 반복되는 유형은 추출 생략 규칙의 후보입니다.</p>
+    <div id="empty"></div>
+    <details><summary>기본 관계 사전</summary><p id="builtin" class="meta"></p></details>
+  </div>
+</main>
+<script type="module" src="/trace.js"></script>
+</body>
+</html>

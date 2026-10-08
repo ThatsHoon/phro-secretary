@@ -1,0 +1,18 @@
+<!doctype html>
+<html lang="ko"><head><meta charset="utf-8"><title>phro-secretary</title><link rel="stylesheet" href="/overlay.css"></head>
+<body><div id="root">
+<div id="stage">
+<canvas id="pet" width="192" height="208" tabindex="0" role="img" aria-label="캐릭터. 끌어서 옮기기, 방향키로 이동, Enter로 글쓰기, 우클릭으로 메뉴"></canvas>
+<button id="dot" type="button" class="dot" data-state="unknown" aria-label="연결 상태 확인 중" title="연결 상태 확인 중"></button>
+</div>
+<nav id="tools"><button id="write" type="button" title="글쓰기 (Ctrl+Shift+Space)" aria-label="글쓰기"><svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path d="M4 20h4L19 9l-4-4L4 16zM14 6l4 4" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></svg></button></nav>
+<form id="compose" hidden>
+<button id="chat" type="button" title="대화 창 열기" aria-label="대화 창 열기"><svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path d="M12 5v14M5 12h14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg></button>
+<input id="text" maxlength="8000" autocomplete="off" placeholder="새 대화 시작" aria-label="대화 입력">
+<button id="send" class="send" title="보내기" aria-label="보내기"><svg class="icon-send" viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path d="M12 19V5M6 11l6-6 6 6" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg><svg class="icon-stop" viewBox="0 0 24 24" width="12" height="12" aria-hidden="true"><rect x="5" y="5" width="14" height="14" rx="2" fill="currentColor"/></svg></button>
+</form>
+<section id="card" hidden role="status" aria-live="polite">
+<div class="card-head"><strong id="card-title"></strong><button id="card-close" type="button" aria-label="닫기" title="닫기"><svg viewBox="0 0 24 24" width="12" height="12" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"/></svg></button></div>
+<p id="card-body" title="클릭하면 펼치기/접기"></p><p id="card-note" hidden></p>
+</section>
+</div><script type="module" src="/overlay.js"></script></body></html>

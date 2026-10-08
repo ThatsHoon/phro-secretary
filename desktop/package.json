@@ -1,0 +1,85 @@
+{
+  "name": "phro-secretary",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "main.cjs",
+  "scripts": {
+    "postinstall": "node node_modules/electron/install.js",
+    "start": "electron .",
+    "test": "node --test test-*.mjs",
+    "dist": "node build-python.mjs && electron-builder --win nsis"
+  },
+  "devDependencies": {
+    "electron": "^44.5.1",
+    "electron-builder": "^26.15.3"
+  },
+  "description": "phro-secretary character companion with long-term memory",
+  "author": "thatshoon",
+  "license": "MIT",
+  "build": {
+    "appId": "ai.phro.desktop",
+    "productName": "phro-secretary",
+    "directories": {
+      "output": "build/dist"
+    },
+    "files": [
+      "main.cjs",
+      "preload.cjs",
+      "pets.cjs",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "build/python",
+        "to": "python"
+      },
+      {
+        "from": "../server.py",
+        "to": "phro/server.py"
+      },
+      {
+        "from": "../memory",
+        "to": "phro/memory",
+        "filter": [
+          "*.py"
+        ]
+      },
+      {
+        "from": "../memory_engine",
+        "to": "phro/memory_engine",
+        "filter": [
+          "**/*.py",
+          "LICENSE",
+          "NOTICE.md"
+        ]
+      },
+      {
+        "from": ".",
+        "to": "phro/desktop",
+        "filter": [
+          "serve.py",
+          "download_pets.py",
+          "*.html",
+          "app.js",
+          "manage.js",
+          "overlay.js",
+          "pipeline.js",
+          "trace.js",
+          "sprite.js",
+          "*.css",
+          "pets/catalog.json"
+        ]
+      }
+    ],
+    "win": {
+      "target": "nsis"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "shortcutName": "phro-secretary"
+    }
+  }
+}

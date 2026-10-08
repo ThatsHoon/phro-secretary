@@ -1,0 +1,22 @@
+[
+  {
+    "id": "monthly-salary-cat-fix",
+    "name": "月薪喵",
+    "version": 2,
+    "author": "xiaoyyy",
+    "source": "https://codex-pets.net/#/pets/monthly-salary-cat-fix",
+    "sheet": "pets/monthly-salary-cat-fix/spritesheet.webp",
+    "sha256": "fc9ee0b926710c8bb6bde6dd462ff5a2db8c67503a9c4994478084e387bb0d95",
+    "download": "https://codex-pets.net/api/pets/monthly-salary-cat-fix/download?v=1784284488125"
+  },
+  {
+    "id": "clawd",
+    "name": "Clawd",
+    "version": 1,
+    "author": "Han1",
+    "source": "https://codex-pets.net/#/pets/clawd",
+    "sheet": "pets/clawd/spritesheet.webp",
+    "sha256": "467b4334beb70ba655121aacef18ba0846d57a9601c7802b2207bbcecd14d5d3",
+    "download": "https://codex-pets.net/api/pets/clawd/download?v=1777707802295"
+  }
+]
