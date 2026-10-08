@@ -119,6 +119,30 @@ def test_rejection_reasons_are_counted_and_flagged(tmp_path):
     date={r['reason']:r for r in service.expansion()['rejections']['reasons']}['date']
     assert date['count']==3 and 'Trip on day 0.' not in [e['user_text'] for e in date['examples']]
 
+def test_retrieval_feedback_noise_and_restated_misses(tmp_path):
+    store,graph,service=setup(tmp_path)
+    seoul=[{'subject':'사용자','subject_type':'Person','relation':'LIVES_IN','object':'서울','object_type':'Place'}]
+    def remember(key,text,relations):
+        turn=store.record_turn(key,text,'네.')
+        return store.confirm([dict(statement=text,source_ids=[turn['user_message']],relations=relations)],store.epoch())[0]
+    def audit(turn,shown,cited):
+        with store.connect() as conn:
+            conn.execute("INSERT INTO llm_calls(purpose,model,ms,turn_id,outcome) VALUES('retrieve_respond','local',0,?,?)",
+                         (turn,json.dumps({'memories':shown})))
+            conn.execute("INSERT INTO llm_calls(purpose,model,ms,turn_id,outcome) VALUES('respond','sonnet',0,?,?)",
+                         (turn,json.dumps({'cited':cited})))
+    home=remember('a','나 서울 살아.',seoul); name=remember('b','내 이름은 민준.',[])
+    for i in range(10):
+        audit(f'q{i}',[home,name],[home] if i==0 else [])
+    restated=remember('c','나 서울에 산다니까.',seoul); audit('c',[name],[])       # stored home not retrieved
+    again=remember('d','서울 산다고.',seoul); audit('d',[home],[home])           # retrieved: a plain repeat
+    report=service.retrieval_feedback()
+    assert (report['turns'],report['shown'],report['cited'])==(12,22,2)
+    assert [m['id'] for m in report['noise']]==[name]  # put in 11 prompts, never cited; home was cited
+    assert [(e['id'],e['earlier'],e['missed']) for e in report['examples']]==[(again,home,False),(restated,home,True)]
+    assert report['restated']==2 and report['missed']==1 and not report['missed_flagged']
+    assert service.expansion()['retrieval']==report
+
 def test_shared_source_forget_closure_and_stale_commit(tmp_path):
     store,graph,service=setup(tmp_path)
     a=store.record_turn('one','a','a reply'); b=store.record_turn('two','b','b reply')

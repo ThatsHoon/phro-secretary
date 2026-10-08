@@ -135,6 +135,12 @@ EXPANSION_SHARE = 0.9
 REJECT_REASONS = ('subject','negation','hypothetical','ambiguous','unsupported','relation','date')
 REJECTION_FLAG = 3
 REJECTION_WINDOW = 200
+# How retrieval served the answers of the last RETRIEVAL_WINDOW turns. A memory put in the prompt NOISE_MIN times
+# and never cited is noise candidate; a fact the user restates while its stored memory was not retrieved for that
+# very input is a retrieval miss, escalated once seen MISSED_FLAG times.
+RETRIEVAL_WINDOW = 200
+NOISE_MIN = 10
+MISSED_FLAG = 3
 
 
 class MemoryService:
@@ -547,7 +553,7 @@ class MemoryService:
                 'learned':[{'relation':r,'kind':k} for k in ('single','multi') for r in sorted(learned[k])],
                 'candidates':sorted(candidates.values(),key=lambda c:(-c['evidence'],-c['count'],c['relation'])),
                 'empty_extractions':[{'turn_key':t,'created_at':at,'user_text':text} for t,at,text in empty],
-                'rejections':self.rejections(),
+                'rejections':self.rejections(),'retrieval':self.retrieval_feedback(),
                 'rule':{'min_evidence':EXPANSION_MIN,'share':EXPANSION_SHARE}}
 
     def rejections(self):
@@ -574,6 +580,55 @@ class MemoryService:
         return {'checks':len(rows),'claims':claims,'rejected':sum(r['count'] for r in reasons.values()),
                 'reasons':sorted(reasons.values(),key=lambda r:(-r['count'],r['reason'])),
                 'rule':{'flag':REJECTION_FLAG,'window':REJECTION_WINDOW}}
+
+    def retrieval_feedback(self):
+        """Citation use and restated facts. Restatements are found by identical triples, so memories without
+        relations are not covered; a fact restated after it was superseded also counts (its old edge is invalid)."""
+        with self.store.connect() as conn:
+            rows = conn.execute("SELECT turn_id,purpose,outcome FROM llm_calls WHERE purpose IN ('retrieve_respond','respond')"
+                                " AND outcome IS NOT NULL AND turn_id IS NOT NULL ORDER BY id DESC LIMIT ?",
+                                (2*RETRIEVAL_WINDOW,)).fetchall()
+            shown, cited = {}, {}
+            for turn, purpose, outcome in rows:
+                outcome = json.loads(outcome)
+                if purpose=='retrieve_respond' and 'memories' in outcome:
+                    shown.setdefault(turn,set(outcome['memories']))
+                elif purpose=='respond' and 'cited' in outcome:
+                    cited.setdefault(turn,set(outcome['cited']))
+            turns = [t for t in shown if t in cited][:RETRIEVAL_WINDOW]
+            counts = {}
+            for t in turns:
+                for mid in shown[t]:
+                    c = counts.setdefault(mid,[0,0]); c[0] += 1; c[1] += mid in cited[t]
+            visible = {r['id']:r for r in conn.execute('SELECT id,statement,pinned,relations FROM memories'
+                                                       ' WHERE hidden_batch IS NULL ORDER BY id')}
+            noise = [{'id':mid,'statement':visible[mid]['statement'],'shown':n} for mid,(n,k) in counts.items()
+                     if n>=NOISE_MIN and not k and mid in visible and not visible[mid]['pinned']]
+            # ponytail: Python scan of every visible memory's triples (10k memories well under a second); index the
+            # triples in SQL if the report gets slow.
+            earlier, restated = {}, []
+            for mid, row in visible.items():
+                for r in json.loads(row['relations'] or '[]'):
+                    key = (r['subject'],r['relation'],r['object'])
+                    if key in earlier:
+                        restated.append((mid,earlier[key]))
+                    earlier.setdefault(key,[]).append(mid)
+            found, seen = [], set()
+            for mid, old in reversed(restated):
+                turn = conn.execute("SELECT g.turn_key,g.text FROM sources s JOIN messages g ON g.id=s.message_id"
+                                    " WHERE s.memory_id=? AND g.role='user' AND g.hidden_batch IS NULL ORDER BY g.id DESC",
+                                    (mid,)).fetchone()
+                if turn and mid not in seen:
+                    seen.add(mid)
+                    found.append({'id':mid,'turn_key':turn[0],'user_text':turn[1],'earlier':old[0],
+                                  'earlier_statement':visible[old[0]]['statement'],
+                                  # None: the turn has no audited retrieval (imported, or before auditing).
+                                  'missed':None if turn[0] not in shown else not set(old) & shown[turn[0]]})
+        missed = sum(f['missed'] is True for f in found)
+        return {'turns':len(turns),'shown':sum(n for n,_ in counts.values()),'cited':sum(k for _,k in counts.values()),
+                'noise':sorted(noise,key=lambda m:(-m['shown'],m['id']))[:10],
+                'restated':len(found),'missed':missed,'missed_flagged':missed>=MISSED_FLAG,'examples':found[:10],
+                'rule':{'window':RETRIEVAL_WINDOW,'noise_min':NOISE_MIN,'missed_flag':MISSED_FLAG}}
 
     def promote(self, relation, kind):
         from .graph import SINGLE, MULTI

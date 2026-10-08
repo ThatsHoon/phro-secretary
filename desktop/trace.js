@@ -154,6 +154,19 @@ async function loadVocabulary() {
           el('td', {class: 'n'}, `${r.count}회`),
           el('td', {class: r.flagged ? 'suggest' : 'meta'}, r.flagged ? '검토 필요' : `관찰 중 (${rj.rule.flag}회부터 검토)`),
           el('td', {}, ...r.examples.map(e => el('div', {}, e.user_text))))))))] : []));
+    const rt = data.retrieval;
+    const table = (head, rows) => el('div', {class: 'scroll'}, el('table', {},
+      el('thead', {}, el('tr', {}, ...head.map(h => el('th', {scope: 'col'}, h)))), el('tbody', {}, ...rows)));
+    $('retrieval').replaceChildren(
+      el('p', {class: 'meta'}, `최근 답변 ${rt.turns}회: 넣은 기억 ${rt.shown}개 중 인용 ${rt.cited}개`),
+      el('h3', {}, `잡음 후보 (${rt.rule.noise_min}회 이상 넣었지만 인용 0)`),
+      rt.noise.length ? table(['기억', '넣은 횟수'], rt.noise.map(m => el('tr', {},
+        el('td', {}, `m:${m.id} ${m.statement}`), el('td', {class: 'n'}, `${m.shown}회`)))) : el('p', {class: 'meta'}, '없음'),
+      el('h3', {}, `다시 말한 사실 ${rt.restated}건, 인출 놓침 ${rt.missed}건`,
+        rt.missed_flagged ? el('span', {class: 'suggest'}, ' 검토 필요') : el('span', {class: 'meta'}, ` (${rt.rule.missed_flag}건부터 검토)`)),
+      rt.examples.length ? table(['입력', '이미 있던 기억', '그 입력의 인출'], rt.examples.map(e => el('tr', {},
+        el('td', {}, e.user_text), el('td', {}, `m:${e.earlier} ${e.earlier_statement}`),
+        el('td', {class: e.missed ? 'suggest' : 'meta'}, e.missed === null ? '기록 없음' : e.missed ? '놓침' : '포함됨')))) : el('p', {class: 'meta'}, '없음'));
     $('builtin').textContent = `대체: ${data.builtin.single.join(', ')} / 누적: ${data.builtin.multi.join(', ')}`;
     $('vocab-status').textContent = `후보 ${data.candidates.length}개`;
   } catch (error) {
