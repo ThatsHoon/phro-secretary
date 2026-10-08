@@ -30,7 +30,60 @@ def catalog():
             print('ignoring unreadable imported pet catalog', file=sys.stderr, flush=True)
             imported = []
         pets += [p for p in imported if isinstance(p, dict) and p.get('id') not in known]
+    known = {p.get('id') for p in pets if isinstance(p, dict)}
+    for folder in pet_dirs():
+        for pet in discovered(folder, known):
+            known.add(pet['id'])
+            pets.append(pet)
     return pets
+
+
+PET_ID = r'[a-z0-9][a-z0-9_-]{0,79}'
+SIZES = {(1536, 2288): 2, (1536, 1872): 1}  # sprite.js validSheet()
+
+
+def webp_size(head):
+    """(width, height) from a WebP header (lossy VP8, lossless VP8L or extended VP8X); desktop/pets.cjs webpSize."""
+    if len(head) < 30 or head[:4] != b'RIFF' or head[8:12] != b'WEBP':
+        raise ValueError('not a WebP image')
+    chunk = head[12:16]
+    if chunk == b'VP8 ':
+        return int.from_bytes(head[26:28], 'little') & 0x3fff, int.from_bytes(head[28:30], 'little') & 0x3fff
+    if chunk == b'VP8L':
+        bits = int.from_bytes(head[21:25], 'little')
+        return (bits & 0x3fff) + 1, ((bits >> 14) & 0x3fff) + 1
+    if chunk == b'VP8X':
+        return int.from_bytes(head[24:27], 'little') + 1, int.from_bytes(head[27:30], 'little') + 1
+    raise ValueError('unsupported WebP layout')
+
+
+def discovered(folder, known):
+    """Sheet folders dropped into a pets folder without a catalogue entry: <id>/spritesheet.webp, the folder
+    name being the id the sheet is served under. pet.json (optional) gives the display name and author.
+    Folders whose sheet is not a supported layout are skipped and reported."""
+    if not folder.is_dir():
+        return
+    for path in sorted(folder.iterdir()):
+        sheet = path / 'spritesheet.webp'
+        if path.name in known or not re.fullmatch(PET_ID, path.name) or not sheet.is_file():
+            continue
+        try:
+            with open(sheet, 'rb') as f:
+                version = SIZES.get(webp_size(f.read(30)))
+            if not version:
+                raise ValueError('expected 1536x2288 (V2) or 1536x1872 (V1)')
+        except ValueError as exc:
+            print(f'skipping pet folder {path.name}: {exc}', file=sys.stderr, flush=True)
+            continue
+        try:
+            manifest = json.loads((path / 'pet.json').read_text(encoding='utf-8')[:65536])
+        except (OSError, ValueError):
+            manifest = {}
+        if not isinstance(manifest, dict):
+            manifest = {}
+        yield {'id': path.name, 'name': str(manifest.get('displayName') or path.name)[:80],
+               'version': version, 'author': str(manifest.get('author') or '')[:80], 'source': 'local',
+               'sheet': f'pets/{path.name}/spritesheet.webp'}
 
 
 class DesktopHandler(api.Handler):

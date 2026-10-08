@@ -66,10 +66,12 @@ app.whenReady().then(async () => {
   const openCompose=()=>{overlay.show();overlay.focus();send('open-compose');};
   const shortcut='Control+Shift+Space';
   let currentPet=null, tray=null;
-  function menu(){
+  // The character list is the server's (desktop/serve.py catalog): catalogued, imported and sheet folders dropped
+  // into a pets folder, the same list the chat and overlay show.
+  async function menu(){
     let pets=builtInPets();
-    try{pets=pets.concat(JSON.parse(fs.readFileSync(path.join(petsDir(),'catalog.json'),'utf8')).filter(p=>!pets.some(b=>b.id===p.id)));}
-    catch(err){if(err.code!=='ENOENT')console.error('imported pets:',err.message);}
+    try{pets=await (await fetch(origin+'/pets/catalog.json')).json();}
+    catch(err){console.error('pet catalog:',err.message);}
     return Menu.buildFromTemplate([
       {label:overlay.isVisible()?'숨기기':'보이기',click:toggleOverlay},
       {label:'글쓰기',accelerator:shortcut,click:openCompose},
@@ -98,7 +100,9 @@ app.whenReady().then(async () => {
     const pick=await dialog.showOpenDialog(overlay,{title:'캐릭터 시트 폴더 선택 (pet.json + spritesheet.webp)',properties:['openDirectory']});
     if(pick.canceled||!pick.filePaths.length)return;
     try{
-      const entry=installPet(pick.filePaths[0],petsDir(),builtInPets().map(p=>p.id));
+      // Folders in the built-in pets folder are served first (desktop/serve.py), so their ids are taken too.
+      const taken=builtInPets().map(p=>p.id).concat(fs.readdirSync(path.join(root,'desktop','pets')));
+      const entry=installPet(pick.filePaths[0],petsDir(),taken);
       send('select-pet',entry.id);
     }catch(err){
       // The previous character stays selected; nothing was swapped in.
@@ -135,7 +139,7 @@ app.whenReady().then(async () => {
   });
   // Transparent pixels pass clicks through; `forward` keeps mousemove coming so the page can switch back.
   ipcMain.on('overlay-ignore',(e,ignore)=>{if(fromOverlay(e))overlay.setIgnoreMouseEvents(!!ignore,{forward:true});});
-  ipcMain.on('overlay-menu',e=>{if(fromOverlay(e))menu().popup({window:overlay});});
+  ipcMain.on('overlay-menu',async e=>{if(fromOverlay(e))(await menu()).popup({window:overlay});});
   ipcMain.on('toggle-chat',e=>{if(fromOverlay(e))toggleChat();});
   ipcMain.on('overlay-onboarded',e=>{if(fromOverlay(e))update({onboarded:true});});
   ipcMain.on('pet-icon',(e,id,dataUrl)=>{
@@ -147,7 +151,7 @@ app.whenReady().then(async () => {
       tray=new Tray(icon);
       tray.setToolTip('phro-secretary');
       tray.on('click',toggleOverlay);
-      tray.on('right-click',()=>tray.popUpContextMenu(menu()));
+      tray.on('right-click',async()=>tray.popUpContextMenu(await menu()));
     } else tray.setImage(icon);
   });
   // Cursor offset from the character for "look at cursor"; only polled while that option is on.

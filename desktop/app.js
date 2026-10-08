@@ -51,7 +51,7 @@ async function refresh() {
   }
 }
 let catalog=[];
-// Re-read on demand: the overlay menu can import characters while the app runs.
+// Re-read on demand: characters can be imported or dropped into a pets folder while the app runs.
 async function loadCatalog() {
   const r=await fetch('/pets/catalog.json');if(!r.ok)throw Error('캐릭터 목록을 읽지 못했습니다.');catalog=await r.json();
   const keep=$('character').value;$('character').replaceChildren(...catalog.map(p=>new Option(p.name,p.id)));
@@ -104,6 +104,8 @@ try {
   await loadCatalog();
   try{const saved=localStorage.getItem('phro-pet');if(catalog.some(p=>p.id===saved))$('character').value=saved;}catch{}
   $('character').addEventListener('change',()=>select().catch(e=>$('status').textContent=e.message));
+  // A sheet folder dropped into a pets folder shows up the next time this window is focused.
+  window.addEventListener('focus',()=>loadCatalog().catch(e=>$('status').textContent=e.message));
   // The overlay menu can switch characters too.
   window.addEventListener('storage',async e=>{
     if(e.key!=='phro-pet'||$('character').value===e.newValue)return;

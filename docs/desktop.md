@@ -54,6 +54,10 @@ Electron이 백엔드(`serve.py`, 8771)를 직접 시작·종료한다. 같은 �
 - 저장: 위치·크기·옵션은 userData `overlay.json`, 캐릭터는 localStorage. 사라진 모니터의 위치는 주 모니터로 되돌린다.
 - 캐릭터 가져오기: create-pet/Codex 펫 폴더(`pet.json` + `spritesheet.webp`). id 형식·내장 충돌·경로 이탈·20MB·WebP 규격을
   검사하고 userData `pets/`에 스테이징 후 교체한다. 실패하면 기존 캐릭터 유지. ZIP은 미지원.
+- 폴더 넣기: `desktop/pets/<id>/spritesheet.webp`(설치본은 userData `pets/<id>/`)를 넣기만 해도 목록에 뜬다
+  (`serve.discovered`). id는 폴더 이름(소문자·숫자·`-`·`_`), 이름·작성자는 있으면 `pet.json`의 `displayName`·`author`.
+  지원 규격(1536x2288 V2, 1536x1872 V1)이 아니면 건너뛰고 로그에 남긴다. 트레이 메뉴는 열 때마다, 대화 창 목록은 창에
+  포커스가 올 때 서버 목록(`/pets/catalog.json`)을 다시 읽는다.
 - 두 창은 `BroadcastChannel`(`phro-motion`, `phro-activity`)로 동작·진행·메시지를 공유한다. 대화 창 닫기는 숨김.
 - 고대비(`forced-colors`, `prefers-contrast`)에서는 시스템 색. `prefers-reduced-motion`이면 애니메이션을 끈다.
 
